@@ -1,0 +1,8 @@
+[package]
+name = "qwiic-relay-rs"
+version = "0.1.0"
+authors = ["Caleb Mitchell Smith-Woolrich <calebsmithwoolrich@gmail.com>"]
+
+[dependencies]
+i2cdev = "0.4.4"
+enum_primitive = "0.1.1"
