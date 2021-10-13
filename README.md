@@ -13,7 +13,7 @@ Roadmap:
 * Map relay commands and addresses to structs (DONE)
 * Ability to toggle all relays on/off (DONE)
 * Ability to toggle individual relays on/off (DONE)
-* Ability to read relay status (WIP)
+* Ability to read relay status (DONE)
 * Ability to check firmware version (DONE)
 * Ability to change relay hardware address (WIP)
 
