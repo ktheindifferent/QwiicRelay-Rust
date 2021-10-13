@@ -135,7 +135,7 @@ mod tests {
 
         let config = QwiicRelayConfig::default();
         let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-        qwiic_relay.print_version()?;
+        qwiic_relay.print_version().unwrap();
 
 
         thread::sleep(Duration::from_secs(1));
