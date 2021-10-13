@@ -26,7 +26,7 @@ qwiic-relay-rs = "0.1.0"
 
 Or for the most recent commit on the master branch use:
 ```
-qwiic-relay-rs = { git = "https://github.com/PixelCoda/QwiicLCD-Rust.git", version = "*" }
+qwiic-relay-rs = { git = "https://github.com/PixelCoda/QwiicRelay-Rust.git", version = "*" }
 ```
 
 Example:
