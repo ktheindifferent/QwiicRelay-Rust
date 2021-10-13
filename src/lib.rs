@@ -90,6 +90,10 @@ impl QwiicRelay {
 
     pub fn init(&mut self) -> RelayResult {
 
+
+
+
+
   
         // Wait for the QwiicRelay to set up
         thread::sleep(Duration::from_millis(200));
@@ -105,6 +109,12 @@ impl QwiicRelay {
 
     pub fn set_all_relays_off(&mut self) -> RelayResult {
         self.write_byte(Command::TurnAllOff as u8)
+    }
+
+    pub fn print_version(&mut self) -> RelayResult {
+        let version = self.dev.smbus_read_byte_data(RelayState::SingleFirmwareVersion as u8)?;
+        println!("Version: {}", version);
+        Ok(())
     }
 
     pub fn write_byte(&mut self, command: u8) -> RelayResult {
@@ -124,8 +134,9 @@ mod tests {
         let _config = QwiicRelayConfig::default();
 
         let config = QwiicRelayConfig::default();
-        let mut QwiicRelay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-    
+        let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+        qwiic_relay.print_version()?;
+
 
         thread::sleep(Duration::from_secs(1));
     }
