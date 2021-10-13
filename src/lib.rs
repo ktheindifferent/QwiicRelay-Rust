@@ -83,6 +83,7 @@ pub struct QwiicRelay {
     config: QwiicRelayConfig,
 }
 
+type RelayDeviceStatus = Result<bool, LinuxI2CError>;
 type RelayResult = Result<(), LinuxI2CError>;
 type VersionResult = Result<u8, LinuxI2CError>;
 
@@ -148,6 +149,30 @@ impl QwiicRelay {
         }
     }
 
+    pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayDeviceStatus {
+        match relay_num {
+            Some(num) => {
+                let read_command = 0x04 + num as u8;
+                let temp = self.dev.smbus_read_byte_data(read_command)?;
+
+                if temp != (Status::Off as u8) {
+                    return Ok(true);
+                } else {
+                    return Ok(false);
+                }                
+            },
+            None => {
+                let read_command = 0x04;
+                let temp = self.dev.smbus_read_byte_data(read_command)?;
+
+                if temp != (Status::Off as u8) {
+                    return Ok(true);
+                } else {
+                    return Ok(false);
+                }         
+            }
+        }
+    }
 
     pub fn set_all_relays_on(&mut self) -> RelayResult {
         self.write_byte(Command::TurnAllOn as u8)

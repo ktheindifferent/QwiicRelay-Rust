@@ -12,10 +12,10 @@ Currently I only have access to the Quad Solid State Relay for testing purposes.
 Roadmap:
 * Map relay commands and addresses to structs (DONE)
 * Ability to toggle all relays on/off (DONE)
-* Ability to toggle individual relays on/off (WIP)
+* Ability to toggle individual relays on/off (DONE)
 * Ability to read relay status (WIP)
+* Ability to check firmware version (DONE)
 * Ability to change relay hardware address (WIP)
-* Ability to check firmware version (WIP)
 
 ## How to use library
 

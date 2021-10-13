@@ -31,12 +31,27 @@ fn main() {
             qwiic_relay.set_relay_on(Some(1)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
+            println!("get_relay_state: 1");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(1)).unwrap();
+            if relay_one_state {
+                println!("relay 1 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+            
+
             println!("set_relay_off: 1");
             qwiic_relay.set_relay_off(Some(1)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
             println!("set_relay_on: 2");
             qwiic_relay.set_relay_on(Some(2)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 2");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(2)).unwrap();
+            if relay_one_state {
+                println!("relay 2 is on!");
+            }
             thread::sleep(Duration::from_secs(2));
 
             println!("set_relay_off: 2");
@@ -47,12 +62,26 @@ fn main() {
             qwiic_relay.set_relay_on(Some(3)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
+            println!("get_relay_state: 3");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(3)).unwrap();
+            if relay_one_state {
+                println!("relay 3 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+
             println!("set_relay_off: 3");
             qwiic_relay.set_relay_off(Some(3)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
             println!("set_relay_on: 4");
             qwiic_relay.set_relay_on(Some(4)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 4");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(4)).unwrap();
+            if relay_one_state {
+                println!("relay 4 is on!");
+            }
             thread::sleep(Duration::from_secs(2));
     
             println!("set_relay_off: 4");
