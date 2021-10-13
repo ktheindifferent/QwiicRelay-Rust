@@ -21,6 +21,11 @@ Roadmap:
 
 Add the following line to your cargo.toml:
 ```
+qwiic-relay-rs = "0.1.0"
+```
+
+Or for the most recent commit on the master branch use:
+```
 qwiic-relay-rs = { git = "https://github.com/PixelCoda/QwiicLCD-Rust.git", version = "*" }
 ```
 
