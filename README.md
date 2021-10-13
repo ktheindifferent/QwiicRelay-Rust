@@ -65,7 +65,6 @@ Released under Apache 2.0.
 
 #### Buying my dope NTFs:
  * https://opensea.io/accounts/PixelCoda
- * https://nft.pixelcoda.com/
 
 #### Checking out my Github:
  * https://github.com/PixelCoda
@@ -75,9 +74,6 @@ Released under Apache 2.0.
 
 #### Subscribing to my Patreon:
  * https://www.patreon.com/calebsmith_pixelcoda
-
-#### Visiting my Website:
- * https://www.pixelcoda.com/
 
 #### Or donating crypto:
  * ADA:    addr1vyjsx8zthl5fks8xjsf6fkrqqsxr4f5tprfwux5zsnz862glwmyr3
