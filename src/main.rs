@@ -62,6 +62,10 @@ fn main() {
             println!("set_relay_on: 3");
             qwiic_relay.set_relay_on(Some(3)).unwrap();
             thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_on: 4");
+            qwiic_relay.set_relay_on(Some(4)).unwrap();
+            thread::sleep(Duration::from_secs(2));
         },
         Err(e) => println!("{:?}", e)
     }
