@@ -78,6 +78,7 @@ pub struct QwiicRelay {
 }
 
 type RelayResult = Result<(), LinuxI2CError>;
+type VersionResult = Result<u8, LinuxI2CError>;
 
 impl QwiicRelay {
     pub fn new(config: QwiicRelayConfig, bus: &str, i2c_addr: u16) -> Result<QwiicRelay, LinuxI2CError> {
@@ -111,10 +112,9 @@ impl QwiicRelay {
         self.write_byte(Command::TurnAllOff as u8)
     }
 
-    pub fn print_version(&mut self) -> RelayResult {
+    pub fn get_version(&mut self) -> VersionResult {
         let version = self.dev.smbus_read_byte_data(RelayState::SingleFirmwareVersion as u8)?;
-        println!("Version: {}", version);
-        Ok(())
+        Ok(version)
     }
 
     pub fn write_byte(&mut self, command: u8) -> RelayResult {
@@ -131,11 +131,16 @@ mod tests {
 
     #[test]
     fn test_init() {
-        let _config = QwiicRelayConfig::default();
 
         let config = QwiicRelayConfig::default();
         let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-        qwiic_relay.print_version().unwrap();
+        let version = qwiic_relay.get_version();
+        match version {
+            Ok(v) => {
+                println!("{}", v);
+            },
+            Err(e) => println!("{:?}", e)
+        }
 
 
         thread::sleep(Duration::from_secs(1));
