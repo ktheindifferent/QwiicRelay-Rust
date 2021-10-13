@@ -34,6 +34,7 @@ pub enum Addresses {
 
 #[derive(Copy, Clone)]
 pub enum Command {
+    DualQuadToggleBase = 0x00,
     ToggleRelayOne = 0x01,
     ToggleRelayTwo = 0x02,
     ToggleRelayThree = 0x03,
@@ -53,6 +54,11 @@ pub enum RelayState {
     On = 0x01,
     SingleFirmwareVersion = 0x04,
     SingleStatusVersion = 0x05,
+}
+
+#[derive(Copy, Clone)]
+pub enum Status {
+    Off = 0
 }
 
 pub struct QwiicRelayConfig {
@@ -102,7 +108,25 @@ impl QwiicRelay {
         Ok(())
     }
 
+    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult {
+        match relay_num {
+            Some(num) => {
+                let read_command = 0x04 + num as u8;
+                let temp = self.dev.smbus_read_byte_data(read_command)?;
 
+                if temp == (Status::Off as u8) {
+                    self.write_byte((Command::DualQuadToggleBase as u8) + num);
+                    return Ok(());
+                } else {
+                    return Ok(());
+                }                
+            },
+            None => {
+                self.write_byte(RelayState::On as u8);
+                return Ok(());
+            }
+        }
+    }
 
     pub fn set_all_relays_on(&mut self) -> RelayResult {
         self.write_byte(Command::TurnAllOn as u8)
