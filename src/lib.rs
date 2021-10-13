@@ -33,7 +33,7 @@ pub enum Addresses {
 }
 
 #[derive(Copy, Clone)]
-pub enum Commands {
+pub enum Command {
     ToggleRelayOne = 0x01,
     ToggleRelayTwo = 0x02,
     ToggleRelayThree = 0x03,
@@ -55,13 +55,13 @@ pub enum RelayState {
     SingleStatusVersion = 0x05,
 }
 
-pub struct Config {
+pub struct QwiicRelayConfig {
     relay_count: u8
 }
 
-impl Config {
+impl QwiicRelayConfig {
     pub fn new(relay_count: u8) -> QwiicRelayConfig {
-        Config {
+        QwiicRelayConfig {
             relay_count: 4,
         }
     }
