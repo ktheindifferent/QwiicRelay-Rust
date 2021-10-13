@@ -27,44 +27,36 @@ fn main() {
             qwiic_relay.set_all_relays_off().unwrap();
             thread::sleep(Duration::from_secs(2));
 
-            println!("set_relay_on: None");
-            qwiic_relay.set_relay_on(None).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_on: 0");
-            qwiic_relay.set_relay_on(Some(0)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-            
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
-            thread::sleep(Duration::from_secs(2));
-
             println!("set_relay_on: 1");
             qwiic_relay.set_relay_on(Some(1)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
+            println!("set_relay_off: 1");
+            qwiic_relay.set_relay_off(Some(1)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
             println!("set_relay_on: 2");
             qwiic_relay.set_relay_on(Some(2)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
+            println!("set_relay_off: 2");
+            qwiic_relay.set_relay_off(Some(2)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
             println!("set_relay_on: 3");
             qwiic_relay.set_relay_on(Some(3)).unwrap();
             thread::sleep(Duration::from_secs(2));
 
+            println!("set_relay_off: 3");
+            qwiic_relay.set_relay_off(Some(3)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
             println!("set_relay_on: 4");
             qwiic_relay.set_relay_on(Some(4)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+    
+            println!("set_relay_off: 4");
+            qwiic_relay.set_relay_off(Some(4)).unwrap();
             thread::sleep(Duration::from_secs(2));
         },
         Err(e) => println!("{:?}", e)

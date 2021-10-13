@@ -128,6 +128,27 @@ impl QwiicRelay {
         }
     }
 
+    pub fn set_relay_off(&mut self, relay_num: Option<u8>) -> RelayResult {
+        match relay_num {
+            Some(num) => {
+                let read_command = 0x04 + num as u8;
+                let temp = self.dev.smbus_read_byte_data(read_command)?;
+
+                if temp != (Status::Off as u8) {
+                    self.write_byte((Command::DualQuadToggleBase as u8) + num);
+                    return Ok(());
+                } else {
+                    return Ok(());
+                }                
+            },
+            None => {
+                self.write_byte(RelayState::Off as u8);
+                return Ok(());
+            }
+        }
+    }
+
+
     pub fn set_all_relays_on(&mut self) -> RelayResult {
         self.write_byte(Command::TurnAllOn as u8)
     }
