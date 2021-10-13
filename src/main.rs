@@ -8,7 +8,7 @@ use std::time::Duration;
 
 fn main() {
     let config = QwiicRelayConfig::default();
-    let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+    let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x6D).expect("Could not init device");
 
     println!("all off");
     qwiic_relay.set_all_relays_off().unwrap();
