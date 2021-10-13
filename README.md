@@ -21,7 +21,7 @@ Roadmap:
 
 Add the following line to your cargo.toml:
 ```
-qwiic-relay-rs = "0.1.0"
+qwiic-relay-rs = "0.1.1"
 ```
 
 Or for the most recent commit on the master branch use:
@@ -31,6 +31,8 @@ qwiic-relay-rs = { git = "https://github.com/PixelCoda/QwiicRelay-Rust.git", ver
 
 Example:
 ```rust
+
+
 extern crate qwiic_relay_rs;
 
 use qwiic_relay_rs::*;
@@ -38,22 +40,89 @@ use std::thread;
 use std::time::Duration;
 
 fn main() {
-    let _config = QwiicRelayConfig::default();
-
     let config = QwiicRelayConfig::default();
     let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+    let version = qwiic_relay.get_version();
+    match version {
+        Ok(v) => {
+            println!("Firmware Version: {}", v);
 
-    println!("all off");
-    qwiic_relay.set_all_relays_off();
-    thread::sleep(Duration::from_secs(2));
 
-    println!("all on");
-    qwiic_relay.set_all_relays_on();
-    thread::sleep(Duration::from_secs(2));
+            println!("all off");
+            qwiic_relay.set_all_relays_off().unwrap();
+            thread::sleep(Duration::from_secs(2));
+        
+            println!("all on");
+            qwiic_relay.set_all_relays_on().unwrap();
+            thread::sleep(Duration::from_secs(2));
+        
+            println!("all off");
+            qwiic_relay.set_all_relays_off().unwrap();
+            thread::sleep(Duration::from_secs(2));
 
-    println!("all off");
-    qwiic_relay.set_all_relays_off();
-    thread::sleep(Duration::from_secs(2));
+            println!("set_relay_on: 1");
+            qwiic_relay.set_relay_on(Some(1)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 1");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(1)).unwrap();
+            if relay_one_state {
+                println!("relay 1 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+            
+
+            println!("set_relay_off: 1");
+            qwiic_relay.set_relay_off(Some(1)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_on: 2");
+            qwiic_relay.set_relay_on(Some(2)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 2");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(2)).unwrap();
+            if relay_one_state {
+                println!("relay 2 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_off: 2");
+            qwiic_relay.set_relay_off(Some(2)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_on: 3");
+            qwiic_relay.set_relay_on(Some(3)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 3");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(3)).unwrap();
+            if relay_one_state {
+                println!("relay 3 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_off: 3");
+            qwiic_relay.set_relay_off(Some(3)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("set_relay_on: 4");
+            qwiic_relay.set_relay_on(Some(4)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+
+            println!("get_relay_state: 4");
+            let relay_one_state = qwiic_relay.get_relay_state(Some(4)).unwrap();
+            if relay_one_state {
+                println!("relay 4 is on!");
+            }
+            thread::sleep(Duration::from_secs(2));
+    
+            println!("set_relay_off: 4");
+            qwiic_relay.set_relay_off(Some(4)).unwrap();
+            thread::sleep(Duration::from_secs(2));
+        },
+        Err(e) => println!("{:?}", e)
+    }
 }
 ```
 
