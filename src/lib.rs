@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate i2cdev;
+//! This provides a Rust API for SparkFun I2C relays like the [SparkFun Qwiic Single Relay].
+//!
+//! [SparkFun Qwiic Single Relay]: https://www.sparkfun.com/sparkfun-qwiic-single-relay.html
 
-use std::thread;
-use std::time::Duration;
+#![forbid(unsafe_code)]
+#![deny(warnings)]
+//#![forbid(missing_docs)] // TODO: add docs for everything
+#![forbid(missing_debug_implementations)]
+#![deny(unused)]
+#![no_std]
 
-use i2cdev::core::*;
-use i2cdev::linux::{LinuxI2CDevice, LinuxI2CError};
+use embedded_hal_async::i2c::{self, I2c, SevenBitAddress};
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Addresses {
     SingleRelayDefault = 0x18,
     SingleRelayJumperClosed = 0x19,
@@ -29,26 +35,28 @@ pub enum Addresses {
     DualSolidState = 0x0A,
     DualSolidStateJumperClosed = 0x0B,
     QuadSolidState = 0x08,
-    QuadSolidStateJumperClosed = 0x09
+    QuadSolidStateJumperClosed = 0x09,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Command {
     DualQuadToggleBase = 0x00,
     ToggleRelayOne = 0x01,
     ToggleRelayTwo = 0x02,
     ToggleRelayThree = 0x03,
     ToggleRelayFour = 0x04,
-    RelayOneStaus = 0x05,
-    RelayTwoStaus = 0x06,
-    RelayThreeStaus = 0x07,
-    RelayFourStaus = 0x08,
+    RelayOneStatus = 0x05,
+    RelayTwoStatus = 0x06,
+    RelayThreeStatus = 0x07,
+    RelayFourStatus = 0x08,
     TurnAllOff = 0x0A,
     TurnAllOn = 0x0B,
-    ToggleAll = 0x0C
+    ToggleAll = 0x0C,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum RelayState {
     Off = 0x00,
     On = 0x01,
@@ -56,236 +64,99 @@ pub enum RelayState {
     SingleStatusVersion = 0x05,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Status {
-    Off = 0
+    Off = 0,
 }
 
-pub struct QwiicRelayConfig {
-    relay_count: u8
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct QwiicRelay<T> {
+    i2c: T,
+    i2c_addr: SevenBitAddress,
 }
 
-impl QwiicRelayConfig {
-    pub fn new(relay_count: u8) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count: 4,
-        }
-    }
-
-    pub fn default() -> QwiicRelayConfig {
-        QwiicRelayConfig::new(4)
-    }
-}
-
-// QwiicRelay
-pub struct QwiicRelay {
-    dev: LinuxI2CDevice,
-    config: QwiicRelayConfig,
-}
-
-type RelayDeviceStatus = Result<bool, LinuxI2CError>;
-type RelayResult = Result<(), LinuxI2CError>;
-type VersionResult = Result<u8, LinuxI2CError>;
-
-impl QwiicRelay {
-    pub fn new(config: QwiicRelayConfig, bus: &str, i2c_addr: u16) -> Result<QwiicRelay, LinuxI2CError> {
-        let dev = LinuxI2CDevice::new(bus, i2c_addr)?;
+impl<T: I2c<Error = E>, E: i2c::Error> QwiicRelay<T> {
+    pub fn new(
+        i2c: T,
+        i2c_addr: SevenBitAddress,
+    ) -> Result<QwiicRelay<T>, E> {
         Ok(QwiicRelay {
-               dev,
-               config,
-           })
+            i2c,
+            i2c_addr,
+        })
     }
 
-    pub fn init(&mut self) -> RelayResult {
-
-
-
-
-
-  
-        // Wait for the QwiicRelay to set up
-        thread::sleep(Duration::from_millis(200));
-
+    pub async fn set_relay_on(&mut self, relay_num: Option<u8>) -> Result<(), E> {
+        if let Some(num) = relay_num {
+            if !self.get_relay_state(relay_num).await? {
+                self.i2c
+                    .write(self.i2c_addr, &[Command::DualQuadToggleBase as u8 + num])
+                    .await?;
+            }
+        } else {
+            self.i2c
+                .write(self.i2c_addr, &[RelayState::On as u8])
+                .await?;
+        }
         Ok(())
     }
 
-    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num as u8;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
+    pub async fn set_relay_off(&mut self, relay_num: Option<u8>) -> Result<(), E> {
+        if let Some(num) = relay_num {
+            let read_command = 0x04 + num;
+            let mut status = [0u8];
+            self.i2c
+                .write_read(self.i2c_addr, &[read_command], &mut status)
+                .await?;
 
-                if temp == (Status::Off as u8) {
-                    self.write_byte((Command::DualQuadToggleBase as u8) + num);
-                    return Ok(());
-                } else {
-                    return Ok(());
-                }                
-            },
-            None => {
-                self.write_byte(RelayState::On as u8);
-                return Ok(());
+            if status[0] != (Status::Off as u8) {
+                self.i2c
+                    .write(self.i2c_addr, &[Command::DualQuadToggleBase as u8 + num])
+                    .await?;
             }
+        } else {
+            self.i2c
+                .write(self.i2c_addr, &[RelayState::Off as u8])
+                .await?;
         }
-    }
-
-    pub fn set_relay_off(&mut self, relay_num: Option<u8>) -> RelayResult {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num as u8;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    self.write_byte((Command::DualQuadToggleBase as u8) + num);
-                    return Ok(());
-                } else {
-                    return Ok(());
-                }                
-            },
-            None => {
-                self.write_byte(RelayState::Off as u8);
-                return Ok(());
-            }
-        }
-    }
-
-    pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayDeviceStatus {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num as u8;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    return Ok(true);
-                } else {
-                    return Ok(false);
-                }                
-            },
-            None => {
-                let read_command = 0x04;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    return Ok(true);
-                } else {
-                    return Ok(false);
-                }         
-            }
-        }
-    }
-
-    pub fn set_all_relays_on(&mut self) -> RelayResult {
-        self.write_byte(Command::TurnAllOn as u8)
-    }
-
-    pub fn set_all_relays_off(&mut self) -> RelayResult {
-        self.write_byte(Command::TurnAllOff as u8)
-    }
-
-    pub fn get_version(&mut self) -> VersionResult {
-        let version = self.dev.smbus_read_byte_data(RelayState::SingleFirmwareVersion as u8)?;
-        Ok(version)
-    }
-
-    pub fn write_byte(&mut self, command: u8) -> RelayResult {
-        self.dev.smbus_write_byte(command)?;
-        thread::sleep(Duration::new(0, 10_000));
         Ok(())
     }
-}
 
+    pub async fn get_relay_state(&mut self, relay_num: Option<u8>) -> Result<bool, E> {
+        let read_command = 0x04 + relay_num.unwrap_or(0);
+        let mut status = [0u8];
+        self.i2c
+            .write_read(self.i2c_addr, &[read_command], &mut status)
+            .await?;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+        Ok(status[0] != Status::Off as u8)
+    }
 
-    #[test]
-    fn test_init() {
+    pub async fn set_all_relays_on(&mut self) -> Result<(), E> {
+        self.i2c
+            .write(self.i2c_addr, &[Command::TurnAllOn as u8])
+            .await
+    }
 
-        let config = QwiicRelayConfig::default();
-        let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-        let version = qwiic_relay.get_version();
-        match version {
-            Ok(v) => {
-                println!("Firmware Version: {}", v);
-    
-    
-                println!("all off");
-                qwiic_relay.set_all_relays_off().unwrap();
-                thread::sleep(Duration::from_secs(2));
-            
-                println!("all on");
-                qwiic_relay.set_all_relays_on().unwrap();
-                thread::sleep(Duration::from_secs(2));
-            
-                println!("all off");
-                qwiic_relay.set_all_relays_off().unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_on: 1");
-                qwiic_relay.set_relay_on(Some(1)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("get_relay_state: 1");
-                let relay_one_state = qwiic_relay.get_relay_state(Some(1)).unwrap();
-                if relay_one_state {
-                    println!("relay 1 is on!");
-                }
-                thread::sleep(Duration::from_secs(2));
-                
-    
-                println!("set_relay_off: 1");
-                qwiic_relay.set_relay_off(Some(1)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_on: 2");
-                qwiic_relay.set_relay_on(Some(2)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("get_relay_state: 2");
-                let relay_one_state = qwiic_relay.get_relay_state(Some(2)).unwrap();
-                if relay_one_state {
-                    println!("relay 2 is on!");
-                }
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_off: 2");
-                qwiic_relay.set_relay_off(Some(2)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_on: 3");
-                qwiic_relay.set_relay_on(Some(3)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("get_relay_state: 3");
-                let relay_one_state = qwiic_relay.get_relay_state(Some(3)).unwrap();
-                if relay_one_state {
-                    println!("relay 3 is on!");
-                }
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_off: 3");
-                qwiic_relay.set_relay_off(Some(3)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("set_relay_on: 4");
-                qwiic_relay.set_relay_on(Some(4)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-    
-                println!("get_relay_state: 4");
-                let relay_one_state = qwiic_relay.get_relay_state(Some(4)).unwrap();
-                if relay_one_state {
-                    println!("relay 4 is on!");
-                }
-                thread::sleep(Duration::from_secs(2));
-        
-                println!("set_relay_off: 4");
-                qwiic_relay.set_relay_off(Some(4)).unwrap();
-                thread::sleep(Duration::from_secs(2));
-            },
-            Err(e) => println!("{:?}", e)
-        }
+    pub async fn set_all_relays_off(&mut self) -> Result<(), E> {
+        self.i2c
+            .write(self.i2c_addr, &[Command::TurnAllOff as u8])
+            .await
+    }
+
+    pub async fn get_version(&mut self) -> Result<u8, E> {
+        let mut version = [0u8];
+        self.i2c
+            .write_read(
+                self.i2c_addr,
+                &[RelayState::SingleFirmwareVersion as u8],
+                &mut version,
+            )
+            .await?;
+        Ok(version[0])
     }
 }
 
-
+// TODO: add tests based on `embedded-hal-mock`
