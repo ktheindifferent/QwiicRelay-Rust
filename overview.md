@@ -30,6 +30,7 @@ The library provides a clean API for relay operations:
 #### Device Management
 - `get_version()` - Get firmware version
 - `init()` - Initialize relay board (200ms startup delay)
+- `change_i2c_address(new_address)` - Change the I2C address of the relay board
 
 ### 3. Data Structures
 

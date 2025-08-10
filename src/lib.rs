@@ -251,6 +251,38 @@ impl QwiicRelay {
         thread::sleep(Duration::new(0, 10_000));
         Ok(())
     }
+
+    /// Changes the I2C address of the relay board.
+    /// 
+    /// Note: This will permanently change the I2C address of the device.
+    /// After changing the address, you'll need to create a new QwiicRelay instance
+    /// with the new address.
+    ///
+    /// # Arguments
+    /// * `new_address` - The new I2C address to set (must be between 0x07 and 0x78)
+    ///
+    /// # Returns
+    /// A Result indicating success or I2C error.
+    pub fn change_i2c_address(&mut self, new_address: u8) -> RelayResult {
+        // Validate address range (7-bit I2C addresses)
+        if !(0x07..=0x78).contains(&new_address) {
+            return Err(LinuxI2CError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "I2C address must be between 0x07 and 0x78",
+            )));
+        }
+
+        // Command to change address: 0xC7 followed by new address
+        const CHANGE_ADDRESS_COMMAND: u8 = 0xC7;
+        
+        // Send the change address command
+        self.dev.smbus_write_byte_data(CHANGE_ADDRESS_COMMAND, new_address)?;
+        
+        // Wait for the device to process the address change
+        thread::sleep(Duration::from_millis(100));
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +353,90 @@ mod tests {
 
         let default_config = QwiicRelayConfig::default();
         assert_eq!(default_config.relay_count, 4);
+    }
+
+    #[test]
+    fn test_config_with_different_relay_counts() {
+        let single = QwiicRelayConfig::new(1);
+        assert_eq!(single.relay_count, 1);
+        
+        let dual = QwiicRelayConfig::new(2);
+        assert_eq!(dual.relay_count, 2);
+        
+        let quad = QwiicRelayConfig::new(4);
+        assert_eq!(quad.relay_count, 4);
+    }
+
+    #[test]
+    fn test_addresses_enum_values() {
+        assert_eq!(Addresses::SingleRelayDefault as u16, 0x18);
+        assert_eq!(Addresses::SingleRelayJumperClosed as u16, 0x19);
+        assert_eq!(Addresses::QuadRelayDefault as u16, 0x6D);
+        assert_eq!(Addresses::QuadRelayJumperClosed as u16, 0x6C);
+        assert_eq!(Addresses::DualSolidState as u16, 0x0A);
+        assert_eq!(Addresses::DualSolidStateJumperClosed as u16, 0x0B);
+        assert_eq!(Addresses::QuadSolidState as u16, 0x08);
+        assert_eq!(Addresses::QuadSolidStateJumperClosed as u16, 0x09);
+    }
+
+    #[test]
+    fn test_command_enum_values() {
+        assert_eq!(Command::DualQuadToggleBase as u8, 0x00);
+        assert_eq!(Command::ToggleRelayOne as u8, 0x01);
+        assert_eq!(Command::ToggleRelayTwo as u8, 0x02);
+        assert_eq!(Command::ToggleRelayThree as u8, 0x03);
+        assert_eq!(Command::ToggleRelayFour as u8, 0x04);
+        assert_eq!(Command::RelayOneStatus as u8, 0x05);
+        assert_eq!(Command::RelayTwoStatus as u8, 0x06);
+        assert_eq!(Command::RelayThreeStatus as u8, 0x07);
+        assert_eq!(Command::RelayFourStatus as u8, 0x08);
+        assert_eq!(Command::TurnAllOff as u8, 0x0A);
+        assert_eq!(Command::TurnAllOn as u8, 0x0B);
+        assert_eq!(Command::ToggleAll as u8, 0x0C);
+    }
+
+    #[test]
+    fn test_relay_state_enum_values() {
+        assert_eq!(RelayState::Off as u8, 0x00);
+        assert_eq!(RelayState::On as u8, 0x01);
+        assert_eq!(RelayState::SingleFirmwareVersion as u8, 0x04);
+        assert_eq!(RelayState::SingleStatusVersion as u8, 0x05);
+    }
+
+    #[test]
+    fn test_status_enum_values() {
+        assert_eq!(Status::Off as u8, 0);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let original = QwiicRelayConfig::new(3);
+        let cloned = original.clone();
+        assert_eq!(original.relay_count, cloned.relay_count);
+    }
+
+    #[test]
+    fn test_config_copy() {
+        let original = QwiicRelayConfig::new(2);
+        let copied = original;
+        assert_eq!(copied.relay_count, 2);
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware and permanently changes device address
+    fn test_change_i2c_address() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+
+        // Test changing to a new address
+        let new_address = 0x09;
+        qwiic_relay
+            .change_i2c_address(new_address)
+            .expect("Failed to change I2C address");
+        
+        // Note: After this, you would need to create a new QwiicRelay instance
+        // with the new address to continue communicating with the device
+        println!("Address changed to 0x{:02X}", new_address);
     }
 }

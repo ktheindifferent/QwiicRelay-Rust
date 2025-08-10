@@ -15,7 +15,7 @@ Roadmap:
 * Ability to toggle individual relays on/off (DONE)
 * Ability to read relay status (DONE)
 * Ability to check firmware version (DONE)
-* Ability to change relay hardware address (WIP)
+* Ability to change relay hardware address (DONE)
 
 ## How to use library
 
