@@ -11,6 +11,7 @@ A Rust library for controlling SparkFun Qwiic Relay boards via I2C on Linux syst
 - Bulk relay operations (all on/off)
 - Relay state querying
 - Firmware version detection
+- I2C address changing capability
 
 ## Recent Work Completed
 - Fixed typos in enum names (RelayStaus → RelayStatus)
@@ -26,6 +27,11 @@ A Rust library for controlling SparkFun Qwiic Relay boards via I2C on Linux syst
 - Improved error handling to propagate errors properly
 - Made config fields public for better API usability
 - Added proper test structure with hardware and unit tests
+- Implemented set_relay_on and set_relay_off methods for individual relay control
+- All unit tests passing (hardware integration tests require physical device)
+- Implemented change_i2c_address method to change relay board I2C address
+- Added comprehensive unit tests for all enums and configuration
+- Fixed clippy warnings for better code quality
 
 ## Architecture
 - Main struct: `QwiicRelay` - handles I2C communication with relay board
