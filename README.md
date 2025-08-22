@@ -18,6 +18,30 @@ Roadmap:
 * Ability to change relay hardware address (DONE)
 * Configurable I2C communication timing (DONE)
 * Auto-detect optimal timing settings (DONE)
+* State verification with retry logic (DONE)
+* Configurable verification modes (DONE)
+* Timeout handling for relay operations (DONE)
+
+## Features
+
+### State Verification
+The library now includes automatic state verification after relay operations to ensure reliable switching:
+
+- **Automatic Verification**: After toggling a relay, the library verifies the state changed correctly
+- **Retry Logic**: Configurable number of retry attempts if verification fails
+- **Timeout Protection**: Operations timeout after a configurable duration to prevent hanging
+- **Multiple Verification Modes**:
+  - `Strict`: Default mode with state verification (3 retries, 1s timeout)
+  - `Lenient`: More tolerant mode for noisy environments (5 retries, 2s timeout)
+  - `Disabled`: No verification for maximum speed
+  - `Custom`: Configure your own retry count, delays, and timeouts
+
+### Error Handling
+Enhanced error types provide detailed feedback:
+- `StateVerificationFailed`: Relay didn't reach expected state
+- `Timeout`: Operation exceeded time limit
+- `InvalidConfiguration`: Configuration parameter error
+- `I2C`: Low-level I2C communication error
 
 ## How to use library
 
@@ -83,6 +107,50 @@ fn main() {
     }
     
     println!("Test complete!");
+}
+```
+
+### State Verification Example
+
+```rust
+use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig, VerificationConfig, RelayError};
+
+fn main() {
+    // Configure strict verification with custom settings
+    let verification = VerificationConfig::default()
+        .with_max_retries(5)
+        .with_retry_delay(100)  // ms between retries
+        .with_verification_delay(50)  // ms to wait before checking state
+        .with_timeout(2000);  // total operation timeout in ms
+    
+    let config = QwiicRelayConfig::with_verification(4, verification);
+    let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)
+        .expect("Could not init device");
+    
+    // Turn on relay with automatic verification
+    match relay.set_relay_on(Some(1)) {
+        Ok(_) => println!("Relay 1 is verified ON"),
+        Err(RelayError::StateVerificationFailed { relay_num, expected, actual, attempts }) => {
+            println!("Verification failed after {} attempts", attempts);
+            println!("Expected: {}, Actual: {}", expected, actual);
+        }
+        Err(RelayError::Timeout { operation, duration_ms, .. }) => {
+            println!("{} timed out after {}ms", operation, duration_ms);
+        }
+        Err(e) => println!("Error: {}", e),
+    }
+    
+    // Use lenient mode for noisy environments
+    let lenient_config = QwiicRelayConfig::with_verification(
+        4, 
+        VerificationConfig::lenient()
+    );
+    
+    // Or disable verification for maximum speed
+    let fast_config = QwiicRelayConfig::with_verification(
+        4,
+        VerificationConfig::disabled()
+    );
 }
 ```
 
