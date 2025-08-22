@@ -74,9 +74,34 @@ pub enum RelayState {
 }
 
 /// Status values returned by the relay board.
-#[derive(Copy, Clone)]
-pub enum Status {
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum RelayStatus {
     Off = 0,
+    On = 1,
+}
+
+impl From<bool> for RelayStatus {
+    fn from(value: bool) -> Self {
+        if value { RelayStatus::On } else { RelayStatus::Off }
+    }
+}
+
+impl From<RelayStatus> for bool {
+    fn from(status: RelayStatus) -> Self {
+        status == RelayStatus::On
+    }
+}
+
+impl From<u8> for RelayStatus {
+    fn from(value: u8) -> Self {
+        if value != 0 { RelayStatus::On } else { RelayStatus::Off }
+    }
+}
+
+impl From<RelayStatus> for u8 {
+    fn from(status: RelayStatus) -> Self {
+        status as u8
+    }
 }
 
 /// Configuration for a Qwiic Relay board.
@@ -224,7 +249,7 @@ impl QwiicRelay {
                 let read_command = 0x04 + num;
                 let temp = self.dev.smbus_read_byte_data(read_command)?;
 
-                if temp == (Status::Off as u8) {
+                if RelayStatus::from(temp) == RelayStatus::Off {
                     self.write_byte((Command::DualQuadToggleBase as u8) + num)?;
                 }
                 Ok(())
@@ -246,7 +271,7 @@ impl QwiicRelay {
                 let read_command = 0x04 + num;
                 let temp = self.dev.smbus_read_byte_data(read_command)?;
 
-                if temp != (Status::Off as u8) {
+                if RelayStatus::from(temp) == RelayStatus::On {
                     self.write_byte((Command::DualQuadToggleBase as u8) + num)?;
                 }
                 Ok(())
@@ -263,28 +288,13 @@ impl QwiicRelay {
     /// # Returns
     /// A Result containing true if the relay is on, false if off, or an I2C error.
     pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayDeviceStatus {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            None => {
-                let read_command = 0x04;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        }
+        let read_command = match relay_num {
+            Some(num) => 0x04 + num,
+            None => 0x04,
+        };
+        
+        let temp = self.dev.smbus_read_byte_data(read_command)?;
+        Ok(RelayStatus::from(temp).into())
     }
 
     /// Turns on all relays on the board.
@@ -589,8 +599,42 @@ mod tests {
     }
 
     #[test]
-    fn test_status_enum_values() {
-        assert_eq!(Status::Off as u8, 0);
+    fn test_relay_status_enum_values() {
+        assert_eq!(RelayStatus::Off as u8, 0);
+        assert_eq!(RelayStatus::On as u8, 1);
+    }
+
+    #[test]
+    fn test_relay_status_from_bool() {
+        assert_eq!(RelayStatus::from(false), RelayStatus::Off);
+        assert_eq!(RelayStatus::from(true), RelayStatus::On);
+    }
+
+    #[test]
+    fn test_relay_status_to_bool() {
+        assert_eq!(bool::from(RelayStatus::Off), false);
+        assert_eq!(bool::from(RelayStatus::On), true);
+    }
+
+    #[test]
+    fn test_relay_status_from_u8() {
+        assert_eq!(RelayStatus::from(0u8), RelayStatus::Off);
+        assert_eq!(RelayStatus::from(1u8), RelayStatus::On);
+        assert_eq!(RelayStatus::from(255u8), RelayStatus::On);
+        assert_eq!(RelayStatus::from(10u8), RelayStatus::On);
+    }
+
+    #[test]
+    fn test_relay_status_to_u8() {
+        assert_eq!(u8::from(RelayStatus::Off), 0);
+        assert_eq!(u8::from(RelayStatus::On), 1);
+    }
+
+    #[test]
+    fn test_relay_status_equality() {
+        assert_eq!(RelayStatus::Off, RelayStatus::Off);
+        assert_eq!(RelayStatus::On, RelayStatus::On);
+        assert_ne!(RelayStatus::Off, RelayStatus::On);
     }
 
     #[test]
