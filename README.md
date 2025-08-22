@@ -16,6 +16,8 @@ Roadmap:
 * Ability to read relay status (DONE)
 * Ability to check firmware version (DONE)
 * Ability to change relay hardware address (DONE)
+* Configurable I2C communication timing (DONE)
+* Auto-detect optimal timing settings (DONE)
 * State verification with retry logic (DONE)
 * Configurable verification modes (DONE)
 * Timeout handling for relay operations (DONE)
@@ -151,6 +153,83 @@ fn main() {
     );
 }
 ```
+
+## Timing Configuration
+
+The library now supports configurable I2C communication timing to accommodate different relay board types and I2C bus speeds. 
+
+### Default Timing
+The default configuration uses:
+- Write delay: 10μs (after each I2C write operation)
+- State change delay: 10ms (for relay state transitions)
+- Initialization delay: 200ms (board startup time)
+
+### Board-Specific Configurations
+
+**Solid State Relays** (faster switching):
+```rust
+let config = QwiicRelayConfig::for_solid_state(4);
+// Uses: 5μs write delay, 5ms state change, 100ms init
+```
+
+**Mechanical Relays** (slower switching):
+```rust
+let config = QwiicRelayConfig::for_mechanical(4);
+// Uses: 15μs write delay, 20ms state change, 250ms init
+```
+
+### Custom Timing
+```rust
+let config = QwiicRelayConfig::with_timing(
+    4,    // relay count
+    15,   // write delay in microseconds
+    25,   // state change delay in milliseconds
+    300   // init delay in milliseconds
+);
+```
+
+### Runtime Adjustment
+```rust
+let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)?;
+
+// Adjust timing at runtime
+relay.set_write_delay(20);           // 20μs write delay
+relay.set_state_change_delay(30);    // 30ms state change delay
+
+// Or update the entire configuration
+let new_config = QwiicRelayConfig::for_solid_state(4);
+relay.update_config(new_config);
+```
+
+### Auto-Detection
+The library can attempt to find optimal timing automatically:
+```rust
+let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)?;
+relay.init()?;
+
+match relay.auto_detect_timing() {
+    Ok(true) => println!("Timing optimized successfully"),
+    Ok(false) => println!("Could not optimize, using defaults"),
+    Err(e) => println!("Auto-detection failed: {:?}", e),
+}
+```
+
+### Timing Guidelines
+
+| Board Type | Write Delay | State Change | Init Delay | Notes |
+|------------|------------|--------------|------------|-------|
+| Solid State | 5-10μs | 5-10ms | 100-150ms | Fast electronic switching |
+| Mechanical | 10-20μs | 15-30ms | 200-300ms | Physical relay movement |
+| Long I2C Bus | 15-30μs | 20-40ms | 250-400ms | Increased capacitance |
+| High Speed I2C | 2-5μs | 5-10ms | 100ms | 400kHz+ bus speed |
+
+### Benchmarking
+Run benchmarks to test different timing configurations:
+```bash
+cargo bench
+```
+
+The benchmark will test various timing configurations and report performance differences.
 
 ## References
 
