@@ -28,11 +28,17 @@
 
 extern crate i2cdev;
 
+mod error;
+mod verification;
+
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use i2cdev::core::*;
-use i2cdev::linux::{LinuxI2CDevice, LinuxI2CError};
+use i2cdev::linux::LinuxI2CDevice;
+
+pub use error::{RelayError, RelayResult};
+pub use verification::{VerificationConfig, VerificationMode};
 
 /// I2C addresses for different Qwiic Relay board configurations.
 #[derive(Copy, Clone)]
@@ -84,6 +90,8 @@ pub enum Status {
 pub struct QwiicRelayConfig {
     /// Number of relays on the board (1, 2, or 4).
     pub relay_count: u8,
+    /// Configuration for state verification after relay operations.
+    pub verification: VerificationConfig,
 }
 
 impl QwiicRelayConfig {
@@ -92,7 +100,22 @@ impl QwiicRelayConfig {
     /// # Arguments
     /// * `relay_count` - Number of relays on the board (typically 1, 2, or 4)
     pub fn new(relay_count: u8) -> QwiicRelayConfig {
-        QwiicRelayConfig { relay_count }
+        QwiicRelayConfig {
+            relay_count,
+            verification: VerificationConfig::default(),
+        }
+    }
+
+    /// Creates a new configuration with custom verification settings.
+    ///
+    /// # Arguments
+    /// * `relay_count` - Number of relays on the board
+    /// * `verification` - Verification configuration
+    pub fn with_verification(relay_count: u8, verification: VerificationConfig) -> QwiicRelayConfig {
+        QwiicRelayConfig {
+            relay_count,
+            verification,
+        }
     }
 }
 
@@ -110,9 +133,8 @@ pub struct QwiicRelay {
     pub config: QwiicRelayConfig,
 }
 
-type RelayDeviceStatus = Result<bool, LinuxI2CError>;
-type RelayResult = Result<(), LinuxI2CError>;
-type VersionResult = Result<u8, LinuxI2CError>;
+type RelayDeviceStatus = Result<bool, RelayError>;
+type VersionResult = Result<u8, RelayError>;
 
 impl QwiicRelay {
     /// Creates a new QwiicRelay instance.
@@ -128,7 +150,7 @@ impl QwiicRelay {
         config: QwiicRelayConfig,
         bus: &str,
         i2c_addr: u16,
-    ) -> Result<QwiicRelay, LinuxI2CError> {
+    ) -> Result<QwiicRelay, RelayError> {
         let dev = LinuxI2CDevice::new(bus, i2c_addr)?;
         Ok(QwiicRelay { dev, config })
     }
@@ -136,7 +158,7 @@ impl QwiicRelay {
     /// Initializes the relay board.
     ///
     /// Waits 200ms for the relay board to set up.
-    pub fn init(&mut self) -> RelayResult {
+    pub fn init(&mut self) -> RelayResult<()> {
         // Wait for the QwiicRelay to set up
         thread::sleep(Duration::from_millis(200));
         Ok(())
@@ -149,7 +171,15 @@ impl QwiicRelay {
     ///
     /// # Returns
     /// A Result indicating success or I2C error.
-    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult {
+    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        match self.config.verification.mode {
+            VerificationMode::Disabled => self.set_relay_on_unverified(relay_num),
+            _ => self.set_relay_on_verified(relay_num),
+        }
+    }
+
+    /// Internal method to turn on a relay without verification.
+    fn set_relay_on_unverified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
         match relay_num {
             Some(num) => {
                 let read_command = 0x04 + num;
@@ -164,6 +194,73 @@ impl QwiicRelay {
         }
     }
 
+    /// Internal method to turn on a relay with state verification and retry logic.
+    fn set_relay_on_verified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        let start_time = Instant::now();
+        let timeout = self.config.verification.timeout();
+        let max_retries = self.config.verification.max_retries;
+        let expected_state = true;
+
+        for attempt in 0..=max_retries {
+            // Check if timeout exceeded
+            if start_time.elapsed() > timeout {
+                return Err(RelayError::Timeout {
+                    relay_num,
+                    operation: "set_relay_on".to_string(),
+                    duration_ms: timeout.as_millis() as u64,
+                });
+            }
+
+            // Try to set the relay on
+            self.set_relay_on_unverified(relay_num)?;
+
+            // Wait for state to stabilize
+            thread::sleep(self.config.verification.verification_delay());
+
+            // Verify the state
+            match self.get_relay_state(relay_num) {
+                Ok(actual_state) if actual_state == expected_state => {
+                    return Ok(());
+                }
+                Ok(actual_state) => {
+                    // State mismatch
+                    if attempt == max_retries {
+                        // Final attempt failed
+                        let error = RelayError::StateVerificationFailed {
+                            relay_num,
+                            expected: expected_state,
+                            actual: actual_state,
+                            attempts: attempt + 1,
+                        };
+
+                        // In lenient mode, we might allow the operation to succeed with a warning
+                        if matches!(self.config.verification.mode, VerificationMode::Lenient) {
+                            // In a real implementation, you might want to log this
+                            // For now, we'll still return the error in lenient mode
+                            // but you could modify this behavior
+                            return Err(error);
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                    // Retry after delay
+                    thread::sleep(self.config.verification.retry_delay());
+                }
+                Err(e) if attempt == max_retries => {
+                    // I2C error on final attempt
+                    return Err(e);
+                }
+                Err(_) => {
+                    // I2C error, retry after delay
+                    thread::sleep(self.config.verification.retry_delay());
+                }
+            }
+        }
+
+        // This should never be reached due to the loop structure
+        unreachable!("Verification loop completed without returning")
+    }
+
     /// Turns off a specific relay.
     ///
     /// # Arguments
@@ -171,7 +268,15 @@ impl QwiicRelay {
     ///
     /// # Returns
     /// A Result indicating success or I2C error.
-    pub fn set_relay_off(&mut self, relay_num: Option<u8>) -> RelayResult {
+    pub fn set_relay_off(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        match self.config.verification.mode {
+            VerificationMode::Disabled => self.set_relay_off_unverified(relay_num),
+            _ => self.set_relay_off_verified(relay_num),
+        }
+    }
+
+    /// Internal method to turn off a relay without verification.
+    fn set_relay_off_unverified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
         match relay_num {
             Some(num) => {
                 let read_command = 0x04 + num;
@@ -184,6 +289,73 @@ impl QwiicRelay {
             }
             None => self.write_byte(RelayState::Off as u8),
         }
+    }
+
+    /// Internal method to turn off a relay with state verification and retry logic.
+    fn set_relay_off_verified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        let start_time = Instant::now();
+        let timeout = self.config.verification.timeout();
+        let max_retries = self.config.verification.max_retries;
+        let expected_state = false;
+
+        for attempt in 0..=max_retries {
+            // Check if timeout exceeded
+            if start_time.elapsed() > timeout {
+                return Err(RelayError::Timeout {
+                    relay_num,
+                    operation: "set_relay_off".to_string(),
+                    duration_ms: timeout.as_millis() as u64,
+                });
+            }
+
+            // Try to set the relay off
+            self.set_relay_off_unverified(relay_num)?;
+
+            // Wait for state to stabilize
+            thread::sleep(self.config.verification.verification_delay());
+
+            // Verify the state
+            match self.get_relay_state(relay_num) {
+                Ok(actual_state) if actual_state == expected_state => {
+                    return Ok(());
+                }
+                Ok(actual_state) => {
+                    // State mismatch
+                    if attempt == max_retries {
+                        // Final attempt failed
+                        let error = RelayError::StateVerificationFailed {
+                            relay_num,
+                            expected: expected_state,
+                            actual: actual_state,
+                            attempts: attempt + 1,
+                        };
+
+                        // In lenient mode, we might allow the operation to succeed with a warning
+                        if matches!(self.config.verification.mode, VerificationMode::Lenient) {
+                            // In a real implementation, you might want to log this
+                            // For now, we'll still return the error in lenient mode
+                            // but you could modify this behavior
+                            return Err(error);
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                    // Retry after delay
+                    thread::sleep(self.config.verification.retry_delay());
+                }
+                Err(e) if attempt == max_retries => {
+                    // I2C error on final attempt
+                    return Err(e);
+                }
+                Err(_) => {
+                    // I2C error, retry after delay
+                    thread::sleep(self.config.verification.retry_delay());
+                }
+            }
+        }
+
+        // This should never be reached due to the loop structure
+        unreachable!("Verification loop completed without returning")
     }
 
     /// Gets the current state of a specific relay.
@@ -219,12 +391,12 @@ impl QwiicRelay {
     }
 
     /// Turns on all relays on the board.
-    pub fn set_all_relays_on(&mut self) -> RelayResult {
+    pub fn set_all_relays_on(&mut self) -> RelayResult<()> {
         self.write_byte(Command::TurnAllOn as u8)
     }
 
     /// Turns off all relays on the board.
-    pub fn set_all_relays_off(&mut self) -> RelayResult {
+    pub fn set_all_relays_off(&mut self) -> RelayResult<()> {
         self.write_byte(Command::TurnAllOff as u8)
     }
 
@@ -246,7 +418,7 @@ impl QwiicRelay {
     ///
     /// # Returns
     /// A Result indicating success or I2C error.
-    pub fn write_byte(&mut self, command: u8) -> RelayResult {
+    pub fn write_byte(&mut self, command: u8) -> RelayResult<()> {
         self.dev.smbus_write_byte(command)?;
         thread::sleep(Duration::new(0, 10_000));
         Ok(())
@@ -263,13 +435,12 @@ impl QwiicRelay {
     ///
     /// # Returns
     /// A Result indicating success or I2C error.
-    pub fn change_i2c_address(&mut self, new_address: u8) -> RelayResult {
+    pub fn change_i2c_address(&mut self, new_address: u8) -> RelayResult<()> {
         // Validate address range (7-bit I2C addresses)
         if !(0x07..=0x78).contains(&new_address) {
-            return Err(LinuxI2CError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "I2C address must be between 0x07 and 0x78",
-            )));
+            return Err(RelayError::InvalidConfiguration(
+                format!("I2C address must be between 0x07 and 0x78, got 0x{:02X}", new_address)
+            ));
         }
 
         // Command to change address: 0xC7 followed by new address
@@ -286,7 +457,10 @@ impl QwiicRelay {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests;
+
+#[cfg(test)]
+mod basic_tests {
     use super::*;
 
     #[test]
