@@ -84,20 +84,89 @@ pub enum Status {
 pub struct QwiicRelayConfig {
     /// Number of relays on the board (1, 2, or 4).
     pub relay_count: u8,
+    /// Microseconds delay after write operations (default: 10).
+    pub write_delay_us: u32,
+    /// Milliseconds to wait for state change (default: 10).
+    pub state_change_delay_ms: u32,
+    /// Milliseconds to wait during initialization (default: 200).
+    pub init_delay_ms: u32,
 }
 
 impl QwiicRelayConfig {
-    /// Creates a new configuration with the specified number of relays.
+    /// Creates a new configuration with the specified number of relays and default timing.
     ///
     /// # Arguments
     /// * `relay_count` - Number of relays on the board (typically 1, 2, or 4)
     pub fn new(relay_count: u8) -> QwiicRelayConfig {
-        QwiicRelayConfig { relay_count }
+        QwiicRelayConfig { 
+            relay_count,
+            write_delay_us: 10,
+            state_change_delay_ms: 10,
+            init_delay_ms: 200,
+        }
+    }
+
+    /// Creates a configuration with custom timing parameters.
+    ///
+    /// # Arguments
+    /// * `relay_count` - Number of relays on the board
+    /// * `write_delay_us` - Microseconds delay after write operations
+    /// * `state_change_delay_ms` - Milliseconds to wait for state change
+    /// * `init_delay_ms` - Milliseconds to wait during initialization
+    pub fn with_timing(
+        relay_count: u8,
+        write_delay_us: u32,
+        state_change_delay_ms: u32,
+        init_delay_ms: u32,
+    ) -> QwiicRelayConfig {
+        QwiicRelayConfig {
+            relay_count,
+            write_delay_us,
+            state_change_delay_ms,
+            init_delay_ms,
+        }
+    }
+
+    /// Creates a configuration optimized for solid state relays.
+    /// Solid state relays typically switch faster than mechanical relays.
+    pub fn for_solid_state(relay_count: u8) -> QwiicRelayConfig {
+        QwiicRelayConfig {
+            relay_count,
+            write_delay_us: 5,      // Faster switching
+            state_change_delay_ms: 5,  // No mechanical delay
+            init_delay_ms: 100,     // Faster initialization
+        }
+    }
+
+    /// Creates a configuration optimized for mechanical relays.
+    /// Mechanical relays need more time for physical switching.
+    pub fn for_mechanical(relay_count: u8) -> QwiicRelayConfig {
+        QwiicRelayConfig {
+            relay_count,
+            write_delay_us: 15,     // More conservative timing
+            state_change_delay_ms: 20,  // Account for mechanical switching
+            init_delay_ms: 250,     // Longer initialization
+        }
+    }
+
+    /// Sets the write delay in microseconds.
+    pub fn set_write_delay_us(&mut self, delay_us: u32) {
+        self.write_delay_us = delay_us;
+    }
+
+    /// Sets the state change delay in milliseconds.
+    pub fn set_state_change_delay_ms(&mut self, delay_ms: u32) {
+        self.state_change_delay_ms = delay_ms;
+    }
+
+    /// Sets the initialization delay in milliseconds.
+    pub fn set_init_delay_ms(&mut self, delay_ms: u32) {
+        self.init_delay_ms = delay_ms;
     }
 }
 
 impl Default for QwiicRelayConfig {
-    /// Creates a default configuration for a quad relay board (4 relays).
+    /// Creates a default configuration for a quad relay board (4 relays) with standard timing.
     fn default() -> Self {
         QwiicRelayConfig::new(4)
     }
@@ -135,10 +204,10 @@ impl QwiicRelay {
 
     /// Initializes the relay board.
     ///
-    /// Waits 200ms for the relay board to set up.
+    /// Waits for the relay board to set up using the configured initialization delay.
     pub fn init(&mut self) -> RelayResult {
         // Wait for the QwiicRelay to set up
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(self.config.init_delay_ms as u64));
         Ok(())
     }
 
@@ -248,8 +317,118 @@ impl QwiicRelay {
     /// A Result indicating success or I2C error.
     pub fn write_byte(&mut self, command: u8) -> RelayResult {
         self.dev.smbus_write_byte(command)?;
-        thread::sleep(Duration::new(0, 10_000));
+        thread::sleep(Duration::new(0, self.config.write_delay_us * 1000));
         Ok(())
+    }
+
+    /// Updates the timing configuration at runtime.
+    ///
+    /// # Arguments
+    /// * `config` - The new configuration with updated timing parameters
+    pub fn update_config(&mut self, config: QwiicRelayConfig) {
+        self.config = config;
+    }
+
+    /// Adjusts the write delay at runtime.
+    ///
+    /// # Arguments
+    /// * `delay_us` - The new delay in microseconds
+    pub fn set_write_delay(&mut self, delay_us: u32) {
+        self.config.write_delay_us = delay_us;
+    }
+
+    /// Adjusts the state change delay at runtime.
+    ///
+    /// # Arguments
+    /// * `delay_ms` - The new delay in milliseconds
+    pub fn set_state_change_delay(&mut self, delay_ms: u32) {
+        self.config.state_change_delay_ms = delay_ms;
+    }
+
+    /// Attempts to auto-detect optimal timing for the relay board.
+    /// 
+    /// This method tests different timing configurations and finds the fastest
+    /// reliable settings. Returns true if optimization was successful.
+    ///
+    /// # Returns
+    /// A Result containing true if timing was optimized, or an I2C error.
+    pub fn auto_detect_timing(&mut self) -> Result<bool, LinuxI2CError> {
+        // Save original config
+        let original_config = self.config;
+        
+        // Test configurations from fastest to slowest
+        let test_configs = [
+            (5, 5),    // Very fast (solid state optimal)
+            (10, 10),  // Standard
+            (15, 15),  // Conservative
+            (20, 20),  // Very conservative
+        ];
+        
+        for (write_us, state_ms) in test_configs.iter() {
+            self.config.write_delay_us = *write_us;
+            self.config.state_change_delay_ms = *state_ms;
+            
+            // Test relay operations with current timing
+            let mut success = true;
+            
+            // Test turning relay 1 on and off multiple times
+            for _ in 0..3 {
+                if let Err(_) = self.set_relay_on(Some(1)) {
+                    success = false;
+                    break;
+                }
+                
+                thread::sleep(Duration::from_millis(self.config.state_change_delay_ms as u64));
+                
+                // Verify the relay is actually on
+                match self.get_relay_state(Some(1)) {
+                    Ok(state) if !state => {
+                        success = false;
+                        break;
+                    }
+                    Err(_) => {
+                        success = false;
+                        break;
+                    }
+                    _ => {}
+                }
+                
+                if let Err(_) = self.set_relay_off(Some(1)) {
+                    success = false;
+                    break;
+                }
+                
+                thread::sleep(Duration::from_millis(self.config.state_change_delay_ms as u64));
+                
+                // Verify the relay is actually off
+                match self.get_relay_state(Some(1)) {
+                    Ok(state) if state => {
+                        success = false;
+                        break;
+                    }
+                    Err(_) => {
+                        success = false;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            
+            if success {
+                // Found working configuration, add small safety margin
+                self.config.write_delay_us = write_us + 2;
+                self.config.state_change_delay_ms = state_ms + 2;
+                
+                // Ensure relay is off after testing
+                let _ = self.set_relay_off(Some(1));
+                
+                return Ok(true);
+            }
+        }
+        
+        // Restore original config if all tests failed
+        self.config = original_config;
+        Ok(false)
     }
 
     /// Changes the I2C address of the relay board.
@@ -350,9 +529,15 @@ mod tests {
     fn test_config_creation() {
         let config = QwiicRelayConfig::new(2);
         assert_eq!(config.relay_count, 2);
+        assert_eq!(config.write_delay_us, 10);
+        assert_eq!(config.state_change_delay_ms, 10);
+        assert_eq!(config.init_delay_ms, 200);
 
         let default_config = QwiicRelayConfig::default();
         assert_eq!(default_config.relay_count, 4);
+        assert_eq!(default_config.write_delay_us, 10);
+        assert_eq!(default_config.state_change_delay_ms, 10);
+        assert_eq!(default_config.init_delay_ms, 200);
     }
 
     #[test]
@@ -438,5 +623,95 @@ mod tests {
         // Note: After this, you would need to create a new QwiicRelay instance
         // with the new address to continue communicating with the device
         println!("Address changed to 0x{:02X}", new_address);
+    }
+
+    #[test]
+    fn test_config_with_timing() {
+        let config = QwiicRelayConfig::with_timing(2, 15, 25, 300);
+        assert_eq!(config.relay_count, 2);
+        assert_eq!(config.write_delay_us, 15);
+        assert_eq!(config.state_change_delay_ms, 25);
+        assert_eq!(config.init_delay_ms, 300);
+    }
+
+    #[test]
+    fn test_config_for_solid_state() {
+        let config = QwiicRelayConfig::for_solid_state(4);
+        assert_eq!(config.relay_count, 4);
+        assert_eq!(config.write_delay_us, 5);
+        assert_eq!(config.state_change_delay_ms, 5);
+        assert_eq!(config.init_delay_ms, 100);
+    }
+
+    #[test]
+    fn test_config_for_mechanical() {
+        let config = QwiicRelayConfig::for_mechanical(2);
+        assert_eq!(config.relay_count, 2);
+        assert_eq!(config.write_delay_us, 15);
+        assert_eq!(config.state_change_delay_ms, 20);
+        assert_eq!(config.init_delay_ms, 250);
+    }
+
+    #[test]
+    fn test_config_setters() {
+        let mut config = QwiicRelayConfig::new(1);
+        
+        config.set_write_delay_us(25);
+        assert_eq!(config.write_delay_us, 25);
+        
+        config.set_state_change_delay_ms(30);
+        assert_eq!(config.state_change_delay_ms, 30);
+        
+        config.set_init_delay_ms(500);
+        assert_eq!(config.init_delay_ms, 500);
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware
+    fn test_runtime_timing_adjustment() {
+        let mut config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+        
+        // Test setting different delays at runtime
+        qwiic_relay.set_write_delay(20);
+        assert_eq!(qwiic_relay.config.write_delay_us, 20);
+        
+        qwiic_relay.set_state_change_delay(15);
+        assert_eq!(qwiic_relay.config.state_change_delay_ms, 15);
+        
+        // Test updating entire config
+        config.write_delay_us = 30;
+        config.state_change_delay_ms = 25;
+        qwiic_relay.update_config(config);
+        assert_eq!(qwiic_relay.config.write_delay_us, 30);
+        assert_eq!(qwiic_relay.config.state_change_delay_ms, 25);
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware
+    fn test_auto_detect_timing() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+        
+        // Initialize the relay board
+        qwiic_relay.init().expect("Failed to initialize");
+        
+        // Try to auto-detect optimal timing
+        match qwiic_relay.auto_detect_timing() {
+            Ok(optimized) => {
+                if optimized {
+                    println!("Timing optimized: write_delay={}μs, state_change_delay={}ms",
+                        qwiic_relay.config.write_delay_us,
+                        qwiic_relay.config.state_change_delay_ms);
+                } else {
+                    println!("Could not optimize timing, using defaults");
+                }
+            }
+            Err(e) => {
+                println!("Auto-detect timing failed: {:?}", e);
+            }
+        }
     }
 }
