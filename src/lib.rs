@@ -186,36 +186,34 @@ impl QwiicRelay {
         }
     }
 
+    /// Reads the status of a relay at the specified register offset.
+    ///
+    /// # Arguments
+    /// * `relay_offset` - The relay register offset (0 for relay 1, 1 for relay 2, etc.)
+    ///
+    /// # Returns
+    /// A Result containing true if the relay is on, false if off, or an I2C error.
+    fn read_relay_status(&mut self, relay_offset: u8) -> RelayDeviceStatus {
+        let read_command = 0x04 + relay_offset;
+        let temp = self.dev.smbus_read_byte_data(read_command)?;
+        Ok(temp != Status::Off as u8)
+    }
+
     /// Gets the current state of a specific relay.
     ///
     /// # Arguments
-    /// * `relay_num` - Optional relay number (1-4). If None, checks the first relay.
+    /// * `relay_num` - Optional relay number (1-4). If None, checks the first relay (relay 1).
+    ///
+    /// # Relay Numbering Scheme:
+    /// - Relay 1: Register 0x04 (offset 0)
+    /// - Relay 2: Register 0x05 (offset 1)  
+    /// - Relay 3: Register 0x06 (offset 2)
+    /// - Relay 4: Register 0x07 (offset 3)
     ///
     /// # Returns
     /// A Result containing true if the relay is on, false if off, or an I2C error.
     pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayDeviceStatus {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            None => {
-                let read_command = 0x04;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if temp != (Status::Off as u8) {
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        }
+        self.read_relay_status(relay_num.unwrap_or(0))
     }
 
     /// Turns on all relays on the board.
@@ -438,5 +436,79 @@ mod tests {
         // Note: After this, you would need to create a new QwiicRelay instance
         // with the new address to continue communicating with the device
         println!("Address changed to 0x{:02X}", new_address);
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run
+    fn test_get_relay_state_with_none() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+
+        // Test getting state with None (should check relay 1 at offset 0)
+        let state = qwiic_relay.get_relay_state(None);
+        assert!(state.is_ok(), "Should successfully read relay state");
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run
+    fn test_get_relay_state_with_specific_relay() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+
+        // Test getting state for each relay (0-3 offset)
+        for relay_num in 0..4 {
+            let state = qwiic_relay.get_relay_state(Some(relay_num));
+            assert!(state.is_ok(), "Should successfully read relay {} state", relay_num + 1);
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run
+    fn test_relay_state_consistency() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+
+        // Turn off all relays first
+        qwiic_relay.set_all_relays_off().expect("Failed to turn off all relays");
+        
+        // Check that None parameter reads relay 1 (offset 0)
+        let state_none = qwiic_relay.get_relay_state(None).expect("Failed to get relay state");
+        let state_zero = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
+        assert_eq!(state_none, state_zero, "None should default to relay 1 (offset 0)");
+        
+        // Both should be off
+        assert_eq!(state_none, false, "Relay should be off after turning all off");
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run
+    fn test_relay_state_after_on_off() {
+        let config = QwiicRelayConfig::default();
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+
+        // Turn off relay 1 first
+        qwiic_relay.set_relay_off(Some(0)).expect("Failed to turn off relay");
+        
+        // Get initial state
+        let initial_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
+        assert_eq!(initial_state, false, "Relay should be off initially");
+        
+        // Turn on relay 1
+        qwiic_relay.set_relay_on(Some(0)).expect("Failed to turn on relay");
+        
+        // Check new state
+        let new_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
+        assert_eq!(new_state, true, "Relay should be on after turning on");
+        
+        // Turn off again
+        qwiic_relay.set_relay_off(Some(0)).expect("Failed to turn off relay");
+        
+        // Check final state
+        let final_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
+        assert_eq!(final_state, false, "Relay should be off after turning off");
     }
 }
