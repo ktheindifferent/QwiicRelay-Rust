@@ -11,3 +11,7 @@ repository = "https://github.com/PixelCoda/QwiicRelay-Rust"
 [dependencies]
 i2cdev = "0.4.4"
 enum_primitive = "0.1.1"
+
+[[bench]]
+name = "timing_benchmarks"
+harness = false
