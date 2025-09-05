@@ -72,7 +72,7 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "std")]
 use i2cdev::core::*;
 #[cfg(feature = "std")]
-use i2cdev::linux::{LinuxI2CDevice, LinuxI2CError};
+use i2cdev::linux::LinuxI2CDevice;
 
 #[cfg(feature = "std")]
 pub use error::{RelayError, RelayResult};
@@ -355,8 +355,6 @@ impl std::fmt::Debug for QwiicRelay {
 }
 
 #[cfg(feature = "std")]
-type RelayDeviceStatus = Result<bool, RelayError>;
-#[cfg(feature = "std")]
 type VersionResult = Result<u8, RelayError>;
 
 #[cfg(feature = "std")]
@@ -405,11 +403,11 @@ impl QwiicRelay {
         
         match self.config.verification.mode {
             VerificationMode::Disabled => Ok(()),
-            VerificationMode::Enabled => {
-                let verification_config = &self.config.verification;
+            VerificationMode::Strict | VerificationMode::Lenient => {
+                let verification_config = self.config.verification;
                 let start_time = Instant::now();
 
-                for attempt in 0..verification_config.retry_attempts {
+                for attempt in 0..verification_config.max_retries {
                     if start_time.elapsed() > Duration::from_millis(verification_config.timeout_ms) {
                         return Err(RelayError::VerificationTimeout {
                             relay_num,
@@ -424,14 +422,14 @@ impl QwiicRelay {
                                 return Ok(());
                             }
                         }
-                        Err(_) if attempt < verification_config.retry_attempts - 1 => {
+                        Err(_) if attempt < verification_config.max_retries - 1 => {
                             thread::sleep(Duration::from_millis(verification_config.retry_delay_ms));
                             continue;
                         }
                         Err(e) => return Err(e),
                     }
 
-                    if attempt < verification_config.retry_attempts - 1 {
+                    if attempt < verification_config.max_retries - 1 {
                         thread::sleep(Duration::from_millis(verification_config.retry_delay_ms));
                     }
                 }
@@ -439,7 +437,7 @@ impl QwiicRelay {
                 Err(RelayError::VerificationFailed {
                     relay_num,
                     expected: expected_state,
-                    attempts: verification_config.retry_attempts,
+                    attempts: verification_config.max_retries,
                 })
             }
         }
