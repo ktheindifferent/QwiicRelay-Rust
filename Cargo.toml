@@ -11,8 +11,17 @@ edition = "2024"
 rust-version = "1.85.0"
 
 [features]
-defmt = [ "dep:defmt" ]
+default = ["std"]
+std = ["dep:i2cdev", "dep:enum_primitive"]
+embedded = ["dep:embedded-hal-async"]
+defmt = ["dep:defmt"]
 
 [dependencies]
-embedded-hal-async = "1"
+embedded-hal-async = { version = "1", optional = true }
 defmt = { version = "1", optional = true }
+i2cdev = { version = "0.4.4", optional = true }
+enum_primitive = { version = "0.1.1", optional = true }
+
+[[bench]]
+name = "timing_benchmarks"
+harness = false

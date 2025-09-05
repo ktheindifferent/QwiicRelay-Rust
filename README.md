@@ -2,8 +2,8 @@
 
 ## Description
 
-This library aims at controlling Qwiic Relays using I2C from Linux. It
-primary target is ARM devices such as RaspberryPi or FriendlyARM's NanoPi Neo.
+This library aims at controlling Qwiic Relays using I2C from Linux. Its
+primary target is ARM devices such as Raspberry Pi or FriendlyARM's NanoPi Neo.
 It should nonetheless work on other Linux distributions with access to an I2C
 bus.
 
@@ -15,7 +15,33 @@ Roadmap:
 * Ability to toggle individual relays on/off (DONE)
 * Ability to read relay status (DONE)
 * Ability to check firmware version (DONE)
-* Ability to change relay hardware address (WIP)
+* Ability to change relay hardware address (DONE)
+* Configurable I2C communication timing (DONE)
+* Auto-detect optimal timing settings (DONE)
+* State verification with retry logic (DONE)
+* Configurable verification modes (DONE)
+* Timeout handling for relay operations (DONE)
+
+## Features
+
+### State Verification
+The library now includes automatic state verification after relay operations to ensure reliable switching:
+
+- **Automatic Verification**: After toggling a relay, the library verifies the state changed correctly
+- **Retry Logic**: Configurable number of retry attempts if verification fails
+- **Timeout Protection**: Operations timeout after a configurable duration to prevent hanging
+- **Multiple Verification Modes**:
+  - `Strict`: Default mode with state verification (3 retries, 1s timeout)
+  - `Lenient`: More tolerant mode for noisy environments (5 retries, 2s timeout)
+  - `Disabled`: No verification for maximum speed
+  - `Custom`: Configure your own retry count, delays, and timeouts
+
+### Error Handling
+Enhanced error types provide detailed feedback:
+- `StateVerificationFailed`: Relay didn't reach expected state
+- `Timeout`: Operation exceeded time limit
+- `InvalidConfiguration`: Configuration parameter error
+- `I2C`: Low-level I2C communication error
 
 ## How to use library
 
@@ -33,98 +59,177 @@ Example:
 ```rust
 
 
-extern crate qwiic_relay_rs;
-
-use qwiic_relay_rs::*;
+use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
 use std::thread;
 use std::time::Duration;
 
 fn main() {
     let config = QwiicRelayConfig::default();
-    let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-    let version = qwiic_relay.get_version();
-    match version {
-        Ok(v) => {
-            println!("Firmware Version: {}", v);
-
-
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
-            thread::sleep(Duration::from_secs(2));
-        
-            println!("all on");
-            qwiic_relay.set_all_relays_on().unwrap();
-            thread::sleep(Duration::from_secs(2));
-        
-            println!("all off");
-            qwiic_relay.set_all_relays_off().unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_on: 1");
-            qwiic_relay.set_relay_on(Some(1)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("get_relay_state: 1");
-            let relay_one_state = qwiic_relay.get_relay_state(Some(1)).unwrap();
-            if relay_one_state {
-                println!("relay 1 is on!");
-            }
-            thread::sleep(Duration::from_secs(2));
-            
-
-            println!("set_relay_off: 1");
-            qwiic_relay.set_relay_off(Some(1)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_on: 2");
-            qwiic_relay.set_relay_on(Some(2)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("get_relay_state: 2");
-            let relay_one_state = qwiic_relay.get_relay_state(Some(2)).unwrap();
-            if relay_one_state {
-                println!("relay 2 is on!");
-            }
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_off: 2");
-            qwiic_relay.set_relay_off(Some(2)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_on: 3");
-            qwiic_relay.set_relay_on(Some(3)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("get_relay_state: 3");
-            let relay_one_state = qwiic_relay.get_relay_state(Some(3)).unwrap();
-            if relay_one_state {
-                println!("relay 3 is on!");
-            }
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_off: 3");
-            qwiic_relay.set_relay_off(Some(3)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("set_relay_on: 4");
-            qwiic_relay.set_relay_on(Some(4)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-
-            println!("get_relay_state: 4");
-            let relay_one_state = qwiic_relay.get_relay_state(Some(4)).unwrap();
-            if relay_one_state {
-                println!("relay 4 is on!");
-            }
-            thread::sleep(Duration::from_secs(2));
+    let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)
+        .expect("Could not init device");
     
-            println!("set_relay_off: 4");
-            qwiic_relay.set_relay_off(Some(4)).unwrap();
-            thread::sleep(Duration::from_secs(2));
-        },
-        Err(e) => println!("{:?}", e)
+    // Get and display firmware version
+    match qwiic_relay.get_version() {
+        Ok(v) => println!("Firmware Version: {}", v),
+        Err(e) => {
+            println!("Error getting version: {:?}", e);
+            return;
+        }
     }
+
+    // Test all relays on/off
+    println!("Testing all relays...");
+    qwiic_relay.set_all_relays_off().unwrap();
+    thread::sleep(Duration::from_secs(1));
+    
+    qwiic_relay.set_all_relays_on().unwrap();
+    thread::sleep(Duration::from_secs(1));
+    
+    qwiic_relay.set_all_relays_off().unwrap();
+    thread::sleep(Duration::from_secs(1));
+
+    // Test individual relays
+    for relay_num in 1..=4 {
+        println!("Testing relay {}", relay_num);
+        
+        // Turn on relay
+        qwiic_relay.set_relay_on(Some(relay_num)).unwrap();
+        thread::sleep(Duration::from_millis(500));
+        
+        // Check state
+        if qwiic_relay.get_relay_state(Some(relay_num)).unwrap() {
+            println!("  Relay {} is ON", relay_num);
+        }
+        
+        // Turn off relay
+        qwiic_relay.set_relay_off(Some(relay_num)).unwrap();
+        thread::sleep(Duration::from_millis(500));
+    }
+    
+    println!("Test complete!");
 }
 ```
+
+### State Verification Example
+
+```rust
+use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig, VerificationConfig, RelayError};
+
+fn main() {
+    // Configure strict verification with custom settings
+    let verification = VerificationConfig::default()
+        .with_max_retries(5)
+        .with_retry_delay(100)  // ms between retries
+        .with_verification_delay(50)  // ms to wait before checking state
+        .with_timeout(2000);  // total operation timeout in ms
+    
+    let config = QwiicRelayConfig::with_verification(4, verification);
+    let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)
+        .expect("Could not init device");
+    
+    // Turn on relay with automatic verification
+    match relay.set_relay_on(Some(1)) {
+        Ok(_) => println!("Relay 1 is verified ON"),
+        Err(RelayError::StateVerificationFailed { relay_num, expected, actual, attempts }) => {
+            println!("Verification failed after {} attempts", attempts);
+            println!("Expected: {}, Actual: {}", expected, actual);
+        }
+        Err(RelayError::Timeout { operation, duration_ms, .. }) => {
+            println!("{} timed out after {}ms", operation, duration_ms);
+        }
+        Err(e) => println!("Error: {}", e),
+    }
+    
+    // Use lenient mode for noisy environments
+    let lenient_config = QwiicRelayConfig::with_verification(
+        4, 
+        VerificationConfig::lenient()
+    );
+    
+    // Or disable verification for maximum speed
+    let fast_config = QwiicRelayConfig::with_verification(
+        4,
+        VerificationConfig::disabled()
+    );
+}
+```
+
+## Timing Configuration
+
+The library now supports configurable I2C communication timing to accommodate different relay board types and I2C bus speeds. 
+
+### Default Timing
+The default configuration uses:
+- Write delay: 10μs (after each I2C write operation)
+- State change delay: 10ms (for relay state transitions)
+- Initialization delay: 200ms (board startup time)
+
+### Board-Specific Configurations
+
+**Solid State Relays** (faster switching):
+```rust
+let config = QwiicRelayConfig::for_solid_state(4);
+// Uses: 5μs write delay, 5ms state change, 100ms init
+```
+
+**Mechanical Relays** (slower switching):
+```rust
+let config = QwiicRelayConfig::for_mechanical(4);
+// Uses: 15μs write delay, 20ms state change, 250ms init
+```
+
+### Custom Timing
+```rust
+let config = QwiicRelayConfig::with_timing(
+    4,    // relay count
+    15,   // write delay in microseconds
+    25,   // state change delay in milliseconds
+    300   // init delay in milliseconds
+);
+```
+
+### Runtime Adjustment
+```rust
+let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)?;
+
+// Adjust timing at runtime
+relay.set_write_delay(20);           // 20μs write delay
+relay.set_state_change_delay(30);    // 30ms state change delay
+
+// Or update the entire configuration
+let new_config = QwiicRelayConfig::for_solid_state(4);
+relay.update_config(new_config);
+```
+
+### Auto-Detection
+The library can attempt to find optimal timing automatically:
+```rust
+let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08)?;
+relay.init()?;
+
+match relay.auto_detect_timing() {
+    Ok(true) => println!("Timing optimized successfully"),
+    Ok(false) => println!("Could not optimize, using defaults"),
+    Err(e) => println!("Auto-detection failed: {:?}", e),
+}
+```
+
+### Timing Guidelines
+
+| Board Type | Write Delay | State Change | Init Delay | Notes |
+|------------|------------|--------------|------------|-------|
+| Solid State | 5-10μs | 5-10ms | 100-150ms | Fast electronic switching |
+| Mechanical | 10-20μs | 15-30ms | 200-300ms | Physical relay movement |
+| Long I2C Bus | 15-30μs | 20-40ms | 250-400ms | Increased capacitance |
+| High Speed I2C | 2-5μs | 5-10ms | 100ms | 400kHz+ bus speed |
+
+### Benchmarking
+Run benchmarks to test different timing configurations:
+```bash
+cargo bench
+```
+
+The benchmark will test various timing configurations and report performance differences.
 
 ## References
 
@@ -133,28 +238,15 @@ fn main() {
 
 ## License
 
-Released under Apache 2.0.
+Licensed under either of:
 
-# Support and follow my work by:
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-#### Buying my dope NTFs:
- * https://opensea.io/accounts/PixelCoda
+at your option.
 
-#### Checking out my Github:
- * https://github.com/PixelCoda
+## Contribution
 
-#### Following my facebook page:
- * https://www.facebook.com/pixelcoda/
-
-#### Subscribing to my Patreon:
- * https://www.patreon.com/calebsmith_pixelcoda
-
-#### Or donating crypto:
- * ADA: addr1qyp299a45tgvveh83tcxlf7ds3yaeh969yt3v882lvxfkkv4e0f46qvr4wzj8ty5c05jyffzq8a9pfwz9dl6m0raac7s4rac48
- * ALGO: VQ5EK4GA3IUTGSPNGV64UANBUVFAIVBXVL5UUCNZSDH544XIMF7BAHEDM4
- * ATOM: cosmos1wm7lummcealk0fxn3x9tm8hg7xsyuz06ul5fw9
- * BTC: bc1qh5p3rff4vxnv23vg0hw8pf3gmz3qgc029cekxz
- * ETH: 0x7A66beaebF7D0d17598d37525e63f524CfD23452
- * ERC20: 0x7A66beaebF7D0d17598d37525e63f524CfD23452
- * XLM: GCJAUMCO2L7PTYMXELQ6GHBTF25MCQKEBNSND2C4QMUPTSVCPEN3LCOG
- * XTZ: tz1SgJppPn56whprsDDGcqR4fxqCr2PXvg1R
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
