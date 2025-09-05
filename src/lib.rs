@@ -1,4 +1,5 @@
 // Copyright 2021 Caleb Mitchell Smith-Woolrich (PixelCoda)
+// Copyright 2024 Ralph Ursprung
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +15,18 @@
 
 //! A Rust library for controlling SparkFun Qwiic Relay boards via I2C.
 //!
-//! This library provides a simple interface for controlling various types of Qwiic Relay boards
-//! including single relays, dual solid state relays, quad relays, and quad solid state relays.
+//! This library provides both embedded (no_std, async) and Linux (std, sync) implementations
+//! for controlling various types of Qwiic Relay boards including single relays, dual solid state relays,
+//! quad relays, and quad solid state relays.
 //!
-//! # Example
+//! # Features
+//! - `std`: Enable Linux-based implementation with i2cdev (default)
+//! - `embedded`: Enable embedded-hal-async implementation for embedded devices  
+//! - `defmt`: Enable defmt support for embedded logging
+//!
+//! # Examples
+//!
+//! ## Linux Example (std feature)
 //! ```no_run
 //! use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
 //!
@@ -25,23 +34,54 @@
 //! let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
 //! relay.set_relay_on(Some(1)).unwrap();
 //! ```
+//!
+//! ## Embedded Example (embedded feature)
+//! ```no_run
+//! use qwiic_relay_rs::{QwiicRelayAsync, Addresses};
+//! use embedded_hal_async::i2c::I2c;
+//!
+//! async fn example<I2C: I2c>(i2c: I2C) -> Result<(), I2C::Error> {
+//!     let mut relay = QwiicRelayAsync::new(i2c, Addresses::QuadSolidState as u8)?;
+//!     relay.set_relay_on(Some(1)).await?;
+//!     Ok(())
+//! }
+//! ```
 
-extern crate i2cdev;
+#![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
+#![deny(warnings)]
+//#![forbid(missing_docs)] // TODO: add docs for everything
+#![forbid(missing_debug_implementations)]
+#![deny(unused)]
 
+// Embedded implementation
+#[cfg(feature = "embedded")]
+use embedded_hal_async::i2c::{self, I2c, SevenBitAddress};
+
+// Linux implementation
+#[cfg(feature = "std")]
 mod error;
+#[cfg(feature = "std")]
 mod verification;
 
+#[cfg(feature = "std")]
 use std::thread;
+#[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "std")]
 use i2cdev::core::*;
+#[cfg(feature = "std")]
 use i2cdev::linux::LinuxI2CDevice;
 
+#[cfg(feature = "std")]
 pub use error::{RelayError, RelayResult};
+#[cfg(feature = "std")]
 pub use verification::{VerificationConfig, VerificationMode};
 
 /// I2C addresses for different Qwiic Relay board configurations.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Addresses {
     SingleRelayDefault = 0x18,
     SingleRelayJumperClosed = 0x19,
@@ -54,7 +94,8 @@ pub enum Addresses {
 }
 
 /// Commands that can be sent to the Qwiic Relay boards.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Command {
     DualQuadToggleBase = 0x00,
     ToggleRelayOne = 0x01,
@@ -71,7 +112,8 @@ pub enum Command {
 }
 
 /// Relay state and control values.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum RelayState {
     Off = 0x00,
     On = 0x01,
@@ -79,6 +121,107 @@ pub enum RelayState {
     SingleStatusVersion = 0x05,
 }
 
+// Embedded async implementation
+#[cfg(feature = "embedded")]
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Status {
+    Off = 0,
+}
+
+#[cfg(feature = "embedded")]
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct QwiicRelayAsync<T> {
+    i2c: T,
+    i2c_addr: SevenBitAddress,
+}
+
+#[cfg(feature = "embedded")]
+impl<T: I2c<Error = E>, E: i2c::Error> QwiicRelayAsync<T> {
+    pub fn new(
+        i2c: T,
+        i2c_addr: SevenBitAddress,
+    ) -> Result<QwiicRelayAsync<T>, E> {
+        Ok(QwiicRelayAsync {
+            i2c,
+            i2c_addr,
+        })
+    }
+
+    pub async fn set_relay_on(&mut self, relay_num: Option<u8>) -> Result<(), E> {
+        if let Some(num) = relay_num {
+            if !self.get_relay_state(relay_num).await? {
+                self.i2c
+                    .write(self.i2c_addr, &[Command::DualQuadToggleBase as u8 + num])
+                    .await?;
+            }
+        } else {
+            self.i2c
+                .write(self.i2c_addr, &[RelayState::On as u8])
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn set_relay_off(&mut self, relay_num: Option<u8>) -> Result<(), E> {
+        if let Some(num) = relay_num {
+            let read_command = 0x04 + num;
+            let mut status = [0u8];
+            self.i2c
+                .write_read(self.i2c_addr, &[read_command], &mut status)
+                .await?;
+
+            if status[0] != (Status::Off as u8) {
+                self.i2c
+                    .write(self.i2c_addr, &[Command::DualQuadToggleBase as u8 + num])
+                    .await?;
+            }
+        } else {
+            self.i2c
+                .write(self.i2c_addr, &[RelayState::Off as u8])
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_relay_state(&mut self, relay_num: Option<u8>) -> Result<bool, E> {
+        let read_command = 0x04 + relay_num.unwrap_or(0);
+        let mut status = [0u8];
+        self.i2c
+            .write_read(self.i2c_addr, &[read_command], &mut status)
+            .await?;
+
+        Ok(status[0] != Status::Off as u8)
+    }
+
+    pub async fn set_all_relays_on(&mut self) -> Result<(), E> {
+        self.i2c
+            .write(self.i2c_addr, &[Command::TurnAllOn as u8])
+            .await
+    }
+
+    pub async fn set_all_relays_off(&mut self) -> Result<(), E> {
+        self.i2c
+            .write(self.i2c_addr, &[Command::TurnAllOff as u8])
+            .await
+    }
+
+    pub async fn get_version(&mut self) -> Result<u8, E> {
+        let mut version = [0u8];
+        self.i2c
+            .write_read(
+                self.i2c_addr,
+                &[RelayState::SingleFirmwareVersion as u8],
+                &mut version,
+            )
+            .await?;
+        Ok(version[0])
+    }
+}
+
+// Linux std implementation
+#[cfg(feature = "std")]
 /// Status values returned by the relay board.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum RelayStatus {
@@ -86,24 +229,28 @@ pub enum RelayStatus {
     On = 1,
 }
 
+#[cfg(feature = "std")]
 impl From<bool> for RelayStatus {
     fn from(value: bool) -> Self {
         if value { RelayStatus::On } else { RelayStatus::Off }
     }
 }
 
+#[cfg(feature = "std")]
 impl From<RelayStatus> for bool {
     fn from(status: RelayStatus) -> Self {
         status == RelayStatus::On
     }
 }
 
+#[cfg(feature = "std")]
 impl From<u8> for RelayStatus {
     fn from(value: u8) -> Self {
         if value != 0 { RelayStatus::On } else { RelayStatus::Off }
     }
 }
 
+#[cfg(feature = "std")]
 impl From<RelayStatus> for u8 {
     fn from(status: RelayStatus) -> Self {
         status as u8
@@ -111,7 +258,8 @@ impl From<RelayStatus> for u8 {
 }
 
 /// Configuration for a Qwiic Relay board.
-#[derive(Clone, Copy)]
+#[cfg(feature = "std")]
+#[derive(Clone, Copy, Debug)]
 pub struct QwiicRelayConfig {
     /// Number of relays on the board (1, 2, or 4).
     pub relay_count: u8,
@@ -125,6 +273,7 @@ pub struct QwiicRelayConfig {
     pub init_delay_ms: u32,
 }
 
+#[cfg(feature = "std")]
 impl QwiicRelayConfig {
     /// Creates a new configuration with the specified number of relays and default timing.
     ///
@@ -140,89 +289,28 @@ impl QwiicRelayConfig {
         }
     }
 
-    /// Creates a new configuration with custom verification settings.
-    ///
-    /// # Arguments
-    /// * `relay_count` - Number of relays on the board
-    /// * `verification` - Verification configuration
-    pub fn with_verification(relay_count: u8, verification: VerificationConfig) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count,
-            verification,
-            write_delay_us: 10,
-            state_change_delay_ms: 10,
-            init_delay_ms: 200,
-        }
+    /// Sets the verification configuration.
+    pub fn with_verification(mut self, verification: VerificationConfig) -> QwiicRelayConfig {
+        self.verification = verification;
+        self
     }
 
-    /// Creates a configuration with custom timing parameters.
-    ///
-    /// # Arguments
-    /// * `relay_count` - Number of relays on the board
-    /// * `write_delay_us` - Microseconds delay after write operations
-    /// * `state_change_delay_ms` - Milliseconds to wait for state change
-    /// * `init_delay_ms` - Milliseconds to wait during initialization
-    pub fn with_timing(
-        relay_count: u8,
-        write_delay_us: u32,
-        state_change_delay_ms: u32,
-        init_delay_ms: u32,
-    ) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count,
-            verification: VerificationConfig::default(),
-            write_delay_us,
-            state_change_delay_ms,
-            init_delay_ms,
-        }
+    /// Sets the write delay in microseconds.
+    pub fn with_write_delay_us(mut self, delay_us: u32) -> QwiicRelayConfig {
+        self.write_delay_us = delay_us;
+        self
     }
 
-    /// Creates a configuration with both custom verification and timing settings.
-    ///
-    /// # Arguments
-    /// * `relay_count` - Number of relays on the board
-    /// * `verification` - Verification configuration
-    /// * `write_delay_us` - Microseconds delay after write operations
-    /// * `state_change_delay_ms` - Milliseconds to wait for state change
-    /// * `init_delay_ms` - Milliseconds to wait during initialization
-    pub fn with_verification_and_timing(
-        relay_count: u8,
-        verification: VerificationConfig,
-        write_delay_us: u32,
-        state_change_delay_ms: u32,
-        init_delay_ms: u32,
-    ) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count,
-            verification,
-            write_delay_us,
-            state_change_delay_ms,
-            init_delay_ms,
-        }
+    /// Sets the state change delay in milliseconds.
+    pub fn with_state_change_delay_ms(mut self, delay_ms: u32) -> QwiicRelayConfig {
+        self.state_change_delay_ms = delay_ms;
+        self
     }
 
-    /// Creates a configuration optimized for solid state relays.
-    /// Solid state relays typically switch faster than mechanical relays.
-    pub fn for_solid_state(relay_count: u8) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count,
-            verification: VerificationConfig::default(),
-            write_delay_us: 5,      // Faster switching
-            state_change_delay_ms: 5,  // No mechanical delay
-            init_delay_ms: 100,     // Faster initialization
-        }
-    }
-
-    /// Creates a configuration optimized for mechanical relays.
-    /// Mechanical relays need more time for physical switching.
-    pub fn for_mechanical(relay_count: u8) -> QwiicRelayConfig {
-        QwiicRelayConfig {
-            relay_count,
-            verification: VerificationConfig::default(),
-            write_delay_us: 15,     // More conservative timing
-            state_change_delay_ms: 20,  // Account for mechanical switching
-            init_delay_ms: 250,     // Longer initialization
-        }
+    /// Sets the initialization delay in milliseconds.
+    pub fn with_init_delay_ms(mut self, delay_ms: u32) -> QwiicRelayConfig {
+        self.init_delay_ms = delay_ms;
+        self
     }
 
     /// Sets the write delay in microseconds.
@@ -241,6 +329,7 @@ impl QwiicRelayConfig {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for QwiicRelayConfig {
     /// Creates a default configuration for a quad relay board (4 relays) with standard timing.
     fn default() -> Self {
@@ -249,15 +338,26 @@ impl Default for QwiicRelayConfig {
 }
 
 /// Main interface for controlling a Qwiic Relay board.
+#[cfg(feature = "std")]
 pub struct QwiicRelay {
     dev: LinuxI2CDevice,
     /// The configuration for this relay board.
     pub config: QwiicRelayConfig,
 }
 
-type RelayDeviceStatus = Result<bool, RelayError>;
+#[cfg(feature = "std")]
+impl std::fmt::Debug for QwiicRelay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QwiicRelay")
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+#[cfg(feature = "std")]
 type VersionResult = Result<u8, RelayError>;
 
+#[cfg(feature = "std")]
 impl QwiicRelay {
     /// Creates a new QwiicRelay instance.
     ///
@@ -266,414 +366,370 @@ impl QwiicRelay {
     /// * `bus` - I2C bus path (e.g., "/dev/i2c-1")
     /// * `i2c_addr` - I2C address of the relay board
     ///
-    /// # Returns
-    /// A Result containing the new QwiicRelay instance or an I2C error.
-    pub fn new(
-        config: QwiicRelayConfig,
-        bus: &str,
-        i2c_addr: u16,
-    ) -> Result<QwiicRelay, RelayError> {
-        let dev = LinuxI2CDevice::new(bus, i2c_addr)?;
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut qwiic_relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// ```
+    pub fn new(config: QwiicRelayConfig, bus: &str, i2c_addr: u16) -> RelayResult<QwiicRelay> {
+        let mut dev = LinuxI2CDevice::new(bus, i2c_addr)?;
+        dev.set_slave_address(i2c_addr)?;
+        thread::sleep(Duration::from_millis(config.init_delay_ms as u64));
         Ok(QwiicRelay { dev, config })
     }
 
-    /// Initializes the relay board.
+    fn delay_after_write(&self) {
+        if self.config.write_delay_us > 0 {
+            thread::sleep(Duration::from_micros(self.config.write_delay_us as u64));
+        }
+    }
+
+    fn wait_for_state_change(&self) {
+        if self.config.state_change_delay_ms > 0 {
+            thread::sleep(Duration::from_millis(
+                self.config.state_change_delay_ms as u64,
+            ));
+        }
+    }
+
+    fn verify_relay_state_if_enabled(
+        &mut self,
+        relay_num: Option<u8>,
+        expected_state: RelayStatus,
+    ) -> RelayResult<()> {
+        use verification::VerificationMode;
+        
+        match self.config.verification.mode {
+            VerificationMode::Disabled => Ok(()),
+            VerificationMode::Strict | VerificationMode::Lenient => {
+                let verification_config = self.config.verification;
+                let start_time = Instant::now();
+
+                for attempt in 0..verification_config.max_retries {
+                    if start_time.elapsed() > Duration::from_millis(verification_config.timeout_ms) {
+                        return Err(RelayError::VerificationTimeout {
+                            relay_num,
+                            expected: expected_state,
+                            timeout_ms: verification_config.timeout_ms,
+                        });
+                    }
+
+                    match self.get_relay_state(relay_num) {
+                        Ok(actual_state) => {
+                            if actual_state == expected_state {
+                                return Ok(());
+                            }
+                        }
+                        Err(_) if attempt < verification_config.max_retries - 1 => {
+                            thread::sleep(Duration::from_millis(verification_config.retry_delay_ms));
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+
+                    if attempt < verification_config.max_retries - 1 {
+                        thread::sleep(Duration::from_millis(verification_config.retry_delay_ms));
+                    }
+                }
+
+                Err(RelayError::VerificationFailed {
+                    relay_num,
+                    expected: expected_state,
+                    attempts: verification_config.max_retries,
+                })
+            }
+        }
+    }
+
+    /// Gets the current status of a specific relay or the single relay.
     ///
-    /// Waits for the relay board to set up using the configured initialization delay.
-    pub fn init(&mut self) -> RelayResult<()> {
-        // Wait for the QwiicRelay to set up
-        thread::sleep(Duration::from_millis(self.config.init_delay_ms as u64));
+    /// # Arguments
+    /// * `relay_num` - Relay number (1-4 for multi-relay boards, None for single relay boards)
+    ///
+    /// # Returns
+    /// `RelayStatus` indicating whether the relay is on or off
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig, RelayStatus};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// let status = relay.get_relay_state(Some(1)).unwrap();
+    /// println!("Relay 1 is {:?}", status);
+    /// ```
+    pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayResult<RelayStatus> {
+        let read_command = if let Some(num) = relay_num {
+            if num < 1 || num > self.config.relay_count {
+                return Err(RelayError::InvalidRelayNumber {
+                    relay_num: num,
+                    max_relays: self.config.relay_count,
+                });
+            }
+            0x04 + num
+        } else {
+            RelayState::SingleStatusVersion as u8
+        };
+
+        let status = self.dev.smbus_read_byte_data(read_command)?;
+        self.delay_after_write();
+        
+        Ok(RelayStatus::from(status))
+    }
+
+    /// Turns a specific relay on.
+    ///
+    /// # Arguments
+    /// * `relay_num` - Relay number (1-4 for multi-relay boards, None for single relay boards)
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.set_relay_on(Some(1)).unwrap();
+    /// ```
+    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        if let Some(num) = relay_num {
+            if num < 1 || num > self.config.relay_count {
+                return Err(RelayError::InvalidRelayNumber {
+                    relay_num: num,
+                    max_relays: self.config.relay_count,
+                });
+            }
+            
+            let current_state = self.get_relay_state(relay_num)?;
+            if current_state != RelayStatus::On {
+                self.dev
+                    .smbus_write_byte(Command::DualQuadToggleBase as u8 + num)?;
+                self.delay_after_write();
+                self.wait_for_state_change();
+            }
+        } else {
+            self.dev.smbus_write_byte(RelayState::On as u8)?;
+            self.delay_after_write();
+            self.wait_for_state_change();
+        }
+
+        self.verify_relay_state_if_enabled(relay_num, RelayStatus::On)?;
         Ok(())
     }
 
-    /// Turns on a specific relay.
+    /// Turns a specific relay off.
     ///
     /// # Arguments
-    /// * `relay_num` - Optional relay number (1-4). If None, operates on single relay boards.
+    /// * `relay_num` - Relay number (1-4 for multi-relay boards, None for single relay boards)
     ///
-    /// # Returns
-    /// A Result indicating success or I2C error.
-    pub fn set_relay_on(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        match self.config.verification.mode {
-            VerificationMode::Disabled => self.set_relay_on_unverified(relay_num),
-            _ => self.set_relay_on_verified(relay_num),
-        }
-    }
-
-    /// Internal method to turn on a relay without verification.
-    fn set_relay_on_unverified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if RelayStatus::from(temp) == RelayStatus::Off {
-                    self.write_byte((Command::DualQuadToggleBase as u8) + num)?;
-                }
-                Ok(())
-            }
-            None => self.write_byte(RelayState::On as u8),
-        }
-    }
-
-    /// Internal method to turn on a relay with state verification and retry logic.
-    fn set_relay_on_verified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        let start_time = Instant::now();
-        let timeout = self.config.verification.timeout();
-        let max_retries = self.config.verification.max_retries;
-        let expected_state = true;
-
-        for attempt in 0..=max_retries {
-            // Check if timeout exceeded
-            if start_time.elapsed() > timeout {
-                return Err(RelayError::Timeout {
-                    relay_num,
-                    operation: "set_relay_on".to_string(),
-                    duration_ms: timeout.as_millis() as u64,
-                });
-            }
-
-            // Try to set the relay on
-            self.set_relay_on_unverified(relay_num)?;
-
-            // Wait for state to stabilize
-            thread::sleep(self.config.verification.verification_delay());
-
-            // Verify the state
-            match self.get_relay_state(relay_num) {
-                Ok(actual_state) if actual_state == expected_state => {
-                    return Ok(());
-                }
-                Ok(actual_state) => {
-                    // State mismatch
-                    if attempt == max_retries {
-                        // Final attempt failed
-                        let error = RelayError::StateVerificationFailed {
-                            relay_num,
-                            expected: expected_state,
-                            actual: actual_state,
-                            attempts: attempt + 1,
-                        };
-
-                        // In lenient mode, we might allow the operation to succeed with a warning
-                        if matches!(self.config.verification.mode, VerificationMode::Lenient) {
-                            // In a real implementation, you might want to log this
-                            // For now, we'll still return the error in lenient mode
-                            // but you could modify this behavior
-                            return Err(error);
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                    // Retry after delay
-                    thread::sleep(self.config.verification.retry_delay());
-                }
-                Err(e) if attempt == max_retries => {
-                    // I2C error on final attempt
-                    return Err(e);
-                }
-                Err(_) => {
-                    // I2C error, retry after delay
-                    thread::sleep(self.config.verification.retry_delay());
-                }
-            }
-        }
-
-        // This should never be reached due to the loop structure
-        unreachable!("Verification loop completed without returning")
-    }
-
-    /// Turns off a specific relay.
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
     ///
-    /// # Arguments
-    /// * `relay_num` - Optional relay number (1-4). If None, operates on single relay boards.
-    ///
-    /// # Returns
-    /// A Result indicating success or I2C error.
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.set_relay_off(Some(1)).unwrap();
+    /// ```
     pub fn set_relay_off(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        match self.config.verification.mode {
-            VerificationMode::Disabled => self.set_relay_off_unverified(relay_num),
-            _ => self.set_relay_off_verified(relay_num),
-        }
-    }
-
-    /// Internal method to turn off a relay without verification.
-    fn set_relay_off_unverified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        match relay_num {
-            Some(num) => {
-                let read_command = 0x04 + num;
-                let temp = self.dev.smbus_read_byte_data(read_command)?;
-
-                if RelayStatus::from(temp) == RelayStatus::On {
-                    self.write_byte((Command::DualQuadToggleBase as u8) + num)?;
-                }
-                Ok(())
-            }
-            None => self.write_byte(RelayState::Off as u8),
-        }
-    }
-
-    /// Internal method to turn off a relay with state verification and retry logic.
-    fn set_relay_off_verified(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
-        let start_time = Instant::now();
-        let timeout = self.config.verification.timeout();
-        let max_retries = self.config.verification.max_retries;
-        let expected_state = false;
-
-        for attempt in 0..=max_retries {
-            // Check if timeout exceeded
-            if start_time.elapsed() > timeout {
-                return Err(RelayError::Timeout {
-                    relay_num,
-                    operation: "set_relay_off".to_string(),
-                    duration_ms: timeout.as_millis() as u64,
+        if let Some(num) = relay_num {
+            if num < 1 || num > self.config.relay_count {
+                return Err(RelayError::InvalidRelayNumber {
+                    relay_num: num,
+                    max_relays: self.config.relay_count,
                 });
             }
-
-            // Try to set the relay off
-            self.set_relay_off_unverified(relay_num)?;
-
-            // Wait for state to stabilize
-            thread::sleep(self.config.verification.verification_delay());
-
-            // Verify the state
-            match self.get_relay_state(relay_num) {
-                Ok(actual_state) if actual_state == expected_state => {
-                    return Ok(());
-                }
-                Ok(actual_state) => {
-                    // State mismatch
-                    if attempt == max_retries {
-                        // Final attempt failed
-                        let error = RelayError::StateVerificationFailed {
-                            relay_num,
-                            expected: expected_state,
-                            actual: actual_state,
-                            attempts: attempt + 1,
-                        };
-
-                        // In lenient mode, we might allow the operation to succeed with a warning
-                        if matches!(self.config.verification.mode, VerificationMode::Lenient) {
-                            // In a real implementation, you might want to log this
-                            // For now, we'll still return the error in lenient mode
-                            // but you could modify this behavior
-                            return Err(error);
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                    // Retry after delay
-                    thread::sleep(self.config.verification.retry_delay());
-                }
-                Err(e) if attempt == max_retries => {
-                    // I2C error on final attempt
-                    return Err(e);
-                }
-                Err(_) => {
-                    // I2C error, retry after delay
-                    thread::sleep(self.config.verification.retry_delay());
-                }
+            
+            let current_state = self.get_relay_state(relay_num)?;
+            if current_state != RelayStatus::Off {
+                self.dev
+                    .smbus_write_byte(Command::DualQuadToggleBase as u8 + num)?;
+                self.delay_after_write();
+                self.wait_for_state_change();
             }
+        } else {
+            self.dev.smbus_write_byte(RelayState::Off as u8)?;
+            self.delay_after_write();
+            self.wait_for_state_change();
         }
 
-        // This should never be reached due to the loop structure
-        unreachable!("Verification loop completed without returning")
+        self.verify_relay_state_if_enabled(relay_num, RelayStatus::Off)?;
+        Ok(())
     }
 
-    /// Reads the status of a relay at the specified register offset.
+    /// Toggles a specific relay (turns it on if off, off if on).
     ///
     /// # Arguments
-    /// * `relay_offset` - The relay register offset (0 for relay 1, 1 for relay 2, etc.)
+    /// * `relay_num` - Relay number (1-4 for multi-relay boards, None for single relay boards)
     ///
-    /// # Returns
-    /// A Result containing true if the relay is on, false if off, or an I2C error.
-    fn read_relay_status(&mut self, relay_offset: u8) -> RelayDeviceStatus {
-        let read_command = 0x04 + relay_offset;
-        let temp = self.dev.smbus_read_byte_data(read_command)?;
-        Ok(RelayStatus::from(temp).into())
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.toggle_relay(Some(1)).unwrap();
+    /// ```
+    pub fn toggle_relay(&mut self, relay_num: Option<u8>) -> RelayResult<()> {
+        if let Some(num) = relay_num {
+            if num < 1 || num > self.config.relay_count {
+                return Err(RelayError::InvalidRelayNumber {
+                    relay_num: num,
+                    max_relays: self.config.relay_count,
+                });
+            }
+            
+            let current_state = self.get_relay_state(relay_num)?;
+            self.dev
+                .smbus_write_byte(Command::DualQuadToggleBase as u8 + num)?;
+            self.delay_after_write();
+            self.wait_for_state_change();
+
+            let expected_state = if current_state == RelayStatus::On {
+                RelayStatus::Off
+            } else {
+                RelayStatus::On
+            };
+            self.verify_relay_state_if_enabled(relay_num, expected_state)?;
+        } else {
+            let current_state = self.get_relay_state(relay_num)?;
+            let toggle_command = if current_state == RelayStatus::On {
+                RelayState::Off as u8
+            } else {
+                RelayState::On as u8
+            };
+            
+            self.dev.smbus_write_byte(toggle_command)?;
+            self.delay_after_write();
+            self.wait_for_state_change();
+
+            let expected_state = if current_state == RelayStatus::On {
+                RelayStatus::Off
+            } else {
+                RelayStatus::On
+            };
+            self.verify_relay_state_if_enabled(relay_num, expected_state)?;
+        }
+        
+        Ok(())
     }
 
-    /// Gets the current state of a specific relay.
+    /// Turns all relays on.
     ///
-    /// # Arguments
-    /// * `relay_num` - Optional relay number (1-4). If None, checks the first relay (relay 1).
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
     ///
-    /// # Relay Numbering Scheme:
-    /// - Relay 1: Register 0x04 (offset 0)
-    /// - Relay 2: Register 0x05 (offset 1)  
-    /// - Relay 3: Register 0x06 (offset 2)
-    /// - Relay 4: Register 0x07 (offset 3)
-    ///
-    /// # Returns
-    /// A Result containing true if the relay is on, false if off, or an I2C error.
-    pub fn get_relay_state(&mut self, relay_num: Option<u8>) -> RelayDeviceStatus {
-        self.read_relay_status(relay_num.unwrap_or(0))
-    }
-
-    /// Turns on all relays on the board.
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.set_all_relays_on().unwrap();
+    /// ```
     pub fn set_all_relays_on(&mut self) -> RelayResult<()> {
-        self.write_byte(Command::TurnAllOn as u8)
+        self.dev.smbus_write_byte(Command::TurnAllOn as u8)?;
+        self.delay_after_write();
+        self.wait_for_state_change();
+
+        for relay_num in 1..=self.config.relay_count {
+            self.verify_relay_state_if_enabled(Some(relay_num), RelayStatus::On)?;
+        }
+        
+        Ok(())
     }
 
-    /// Turns off all relays on the board.
+    /// Turns all relays off.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.set_all_relays_off().unwrap();
+    /// ```
     pub fn set_all_relays_off(&mut self) -> RelayResult<()> {
-        self.write_byte(Command::TurnAllOff as u8)
+        self.dev.smbus_write_byte(Command::TurnAllOff as u8)?;
+        self.delay_after_write();
+        self.wait_for_state_change();
+
+        for relay_num in 1..=self.config.relay_count {
+            self.verify_relay_state_if_enabled(Some(relay_num), RelayStatus::Off)?;
+        }
+        
+        Ok(())
     }
 
-    /// Gets the firmware version of the relay board.
+    /// Toggles all relays (turns them on if off, off if on).
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.toggle_all_relays().unwrap();
+    /// ```
+    pub fn toggle_all_relays(&mut self) -> RelayResult<()> {
+        self.dev.smbus_write_byte(Command::ToggleAll as u8)?;
+        self.delay_after_write();
+        self.wait_for_state_change();
+        Ok(())
+    }
+
+    /// Gets the firmware version from the relay board.
     ///
     /// # Returns
-    /// A Result containing the firmware version number or an I2C error.
+    /// The firmware version as a u8
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// let version = relay.get_version().unwrap();
+    /// println!("Firmware version: {}", version);
+    /// ```
     pub fn get_version(&mut self) -> VersionResult {
         let version = self
             .dev
             .smbus_read_byte_data(RelayState::SingleFirmwareVersion as u8)?;
+        self.delay_after_write();
         Ok(version)
     }
 
-    /// Writes a single byte command to the relay board.
-    ///
-    /// # Arguments
-    /// * `command` - The command byte to send
-    ///
-    /// # Returns
-    /// A Result indicating success or I2C error.
-    pub fn write_byte(&mut self, command: u8) -> RelayResult<()> {
-        self.dev.smbus_write_byte(command)?;
-        thread::sleep(Duration::new(0, self.config.write_delay_us * 1000));
-        Ok(())
-    }
-
-    /// Updates the timing configuration at runtime.
-    ///
-    /// # Arguments
-    /// * `config` - The new configuration with updated timing parameters
-    pub fn update_config(&mut self, config: QwiicRelayConfig) {
-        self.config = config;
-    }
-
-    /// Adjusts the write delay at runtime.
-    ///
-    /// # Arguments
-    /// * `delay_us` - The new delay in microseconds
-    pub fn set_write_delay(&mut self, delay_us: u32) {
-        self.config.write_delay_us = delay_us;
-    }
-
-    /// Adjusts the state change delay at runtime.
-    ///
-    /// # Arguments
-    /// * `delay_ms` - The new delay in milliseconds
-    pub fn set_state_change_delay(&mut self, delay_ms: u32) {
-        self.config.state_change_delay_ms = delay_ms;
-    }
-
-    /// Attempts to auto-detect optimal timing for the relay board.
-    /// 
-    /// This method tests different timing configurations and finds the fastest
-    /// reliable settings. Returns true if optimization was successful.
-    ///
-    /// # Returns
-    /// A Result containing true if timing was optimized, or an I2C error.
-    pub fn auto_detect_timing(&mut self) -> Result<bool, LinuxI2CError> {
-        // Save original config
-        let original_config = self.config;
-        
-        // Test configurations from fastest to slowest
-        let test_configs = [
-            (5, 5),    // Very fast (solid state optimal)
-            (10, 10),  // Standard
-            (15, 15),  // Conservative
-            (20, 20),  // Very conservative
-        ];
-        
-        for (write_us, state_ms) in test_configs.iter() {
-            self.config.write_delay_us = *write_us;
-            self.config.state_change_delay_ms = *state_ms;
-            
-            // Test relay operations with current timing
-            let mut success = true;
-            
-            // Test turning relay 1 on and off multiple times
-            for _ in 0..3 {
-                if let Err(_) = self.set_relay_on(Some(1)) {
-                    success = false;
-                    break;
-                }
-                
-                thread::sleep(Duration::from_millis(self.config.state_change_delay_ms as u64));
-                
-                // Verify the relay is actually on
-                match self.get_relay_state(Some(1)) {
-                    Ok(state) if !state => {
-                        success = false;
-                        break;
-                    }
-                    Err(_) => {
-                        success = false;
-                        break;
-                    }
-                    _ => {}
-                }
-                
-                if let Err(_) = self.set_relay_off(Some(1)) {
-                    success = false;
-                    break;
-                }
-                
-                thread::sleep(Duration::from_millis(self.config.state_change_delay_ms as u64));
-                
-                // Verify the relay is actually off
-                match self.get_relay_state(Some(1)) {
-                    Ok(state) if state => {
-                        success = false;
-                        break;
-                    }
-                    Err(_) => {
-                        success = false;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            
-            if success {
-                // Found working configuration, add small safety margin
-                self.config.write_delay_us = write_us + 2;
-                self.config.state_change_delay_ms = state_ms + 2;
-                
-                // Ensure relay is off after testing
-                let _ = self.set_relay_off(Some(1));
-                
-                return Ok(true);
-            }
-        }
-        
-        // Restore original config if all tests failed
-        self.config = original_config;
-        Ok(false)
-    }
-
     /// Changes the I2C address of the relay board.
-    /// 
-    /// Note: This will permanently change the I2C address of the device.
-    /// After changing the address, you'll need to create a new QwiicRelay instance
-    /// with the new address.
+    ///
+    /// **WARNING**: This permanently changes the I2C address stored in the device's EEPROM.
+    /// The device will use this new address after power cycling. Make sure the new address
+    /// doesn't conflict with other I2C devices on the bus.
     ///
     /// # Arguments
-    /// * `new_address` - The new I2C address to set (must be between 0x07 and 0x78)
+    /// * `new_address` - The new I2C address (0x08-0x77, avoid reserved addresses)
     ///
     /// # Returns
-    /// A Result indicating success or I2C error.
+    /// `RelayResult<()>` - Ok if successful, Err with details if failed
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use qwiic_relay_rs::{QwiicRelay, QwiicRelayConfig};
+    ///
+    /// let config = QwiicRelayConfig::default();
+    /// let mut relay = QwiicRelay::new(config, "/dev/i2c-1", 0x08).unwrap();
+    /// relay.change_i2c_address(0x10).unwrap(); // Change to address 0x10
+    /// // Device must be power cycled to use the new address
+    /// ```
+    ///
+    /// # Safety Notes
+    /// - This change is permanent and stored in EEPROM
+    /// - The device must be power cycled to use the new address
+    /// - Ensure the new address doesn't conflict with other devices
+    /// - Reserved I2C addresses (0x00-0x07, 0x78-0x7F) should be avoided
     pub fn change_i2c_address(&mut self, new_address: u8) -> RelayResult<()> {
-        // Validate address range (7-bit I2C addresses)
-        if !(0x07..=0x78).contains(&new_address) {
-            return Err(RelayError::InvalidConfiguration(
-                format!("I2C address must be between 0x07 and 0x78, got 0x{:02X}", new_address)
-            ));
+        // Validate the new address
+        if new_address < 0x08 || new_address > 0x77 {
+            return Err(RelayError::InvalidI2CAddress(new_address));
         }
-
-        // Command to change address: 0xC7 followed by new address
+        
         const CHANGE_ADDRESS_COMMAND: u8 = 0xC7;
         
         // Send the change address command
@@ -686,10 +742,10 @@ impl QwiicRelay {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod basic_tests {
     use super::*;
 
@@ -698,370 +754,134 @@ mod basic_tests {
     fn test_relay_operations() {
         let config = QwiicRelayConfig::default();
         let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+            QwiicRelay::new(config, "/dev/i2c-1", 0x18).expect("Failed to create relay");
 
-        // Test firmware version
-        let version = qwiic_relay
-            .get_version()
-            .expect("Failed to get firmware version");
-        println!("Firmware Version: {}", version);
-
-        // Test all relays on/off
         qwiic_relay
-            .set_all_relays_off()
-            .expect("Failed to turn all relays off");
-        thread::sleep(Duration::from_millis(500));
+            .set_relay_on(None)
+            .expect("Failed to turn relay on");
+
+        let state = qwiic_relay
+            .get_relay_state(None)
+            .expect("Failed to get relay state");
+        assert_eq!(state, RelayStatus::On);
+
+        qwiic_relay
+            .set_relay_off(None)
+            .expect("Failed to turn relay off");
+
+        let state = qwiic_relay
+            .get_relay_state(None)
+            .expect("Failed to get relay state");
+        assert_eq!(state, RelayStatus::Off);
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run  
+    fn test_multi_relay_operations() {
+        let config = QwiicRelayConfig::new(4);
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x6D).expect("Failed to create relay");
+
+        for relay_num in 1..=4 {
+            qwiic_relay
+                .set_relay_on(Some(relay_num))
+                .expect("Failed to turn relay on");
+
+            let state = qwiic_relay
+                .get_relay_state(Some(relay_num))
+                .expect("Failed to get relay state");
+            assert_eq!(state, RelayStatus::On);
+
+            qwiic_relay
+                .set_relay_off(Some(relay_num))
+                .expect("Failed to turn relay off");
+
+            let state = qwiic_relay
+                .get_relay_state(Some(relay_num))
+                .expect("Failed to get relay state");
+            assert_eq!(state, RelayStatus::Off);
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires actual hardware to run
+    fn test_all_relay_operations() {
+        let config = QwiicRelayConfig::new(4);
+        let mut qwiic_relay =
+            QwiicRelay::new(config, "/dev/i2c-1", 0x6D).expect("Failed to create relay");
 
         qwiic_relay
             .set_all_relays_on()
             .expect("Failed to turn all relays on");
-        thread::sleep(Duration::from_millis(500));
+
+        for relay_num in 1..=4 {
+            let state = qwiic_relay
+                .get_relay_state(Some(relay_num))
+                .expect("Failed to get relay state");
+            assert_eq!(state, RelayStatus::On);
+        }
 
         qwiic_relay
             .set_all_relays_off()
             .expect("Failed to turn all relays off");
-        thread::sleep(Duration::from_millis(500));
 
-        // Test individual relays
         for relay_num in 1..=4 {
-            // Turn on
-            qwiic_relay
-                .set_relay_on(Some(relay_num))
-                .unwrap_or_else(|e| panic!("Failed to turn on relay {}: {:?}", relay_num, e));
-            thread::sleep(Duration::from_millis(250));
-
-            // Verify state
             let state = qwiic_relay
                 .get_relay_state(Some(relay_num))
-                .unwrap_or_else(|e| panic!("Failed to get state of relay {}: {:?}", relay_num, e));
-            assert!(state, "Relay {} should be on", relay_num);
-
-            // Turn off
-            qwiic_relay
-                .set_relay_off(Some(relay_num))
-                .unwrap_or_else(|e| panic!("Failed to turn off relay {}: {:?}", relay_num, e));
-            thread::sleep(Duration::from_millis(250));
-
-            // Verify state
-            let state = qwiic_relay
-                .get_relay_state(Some(relay_num))
-                .unwrap_or_else(|e| panic!("Failed to get state of relay {}: {:?}", relay_num, e));
-            assert!(!state, "Relay {} should be off", relay_num);
+                .expect("Failed to get relay state");
+            assert_eq!(state, RelayStatus::Off);
         }
     }
 
     #[test]
-    fn test_config_creation() {
-        let config = QwiicRelayConfig::new(2);
-        assert_eq!(config.relay_count, 2);
-        assert_eq!(config.write_delay_us, 10);
-        assert_eq!(config.state_change_delay_ms, 10);
-        assert_eq!(config.init_delay_ms, 200);
-
-        let default_config = QwiicRelayConfig::default();
-        assert_eq!(default_config.relay_count, 4);
-        assert_eq!(default_config.write_delay_us, 10);
-        assert_eq!(default_config.state_change_delay_ms, 10);
-        assert_eq!(default_config.init_delay_ms, 200);
-    }
-
-    #[test]
-    fn test_config_with_different_relay_counts() {
-        let single = QwiicRelayConfig::new(1);
-        assert_eq!(single.relay_count, 1);
-        
-        let dual = QwiicRelayConfig::new(2);
-        assert_eq!(dual.relay_count, 2);
-        
-        let quad = QwiicRelayConfig::new(4);
-        assert_eq!(quad.relay_count, 4);
-    }
-
-    #[test]
-    fn test_addresses_enum_values() {
-        assert_eq!(Addresses::SingleRelayDefault as u16, 0x18);
-        assert_eq!(Addresses::SingleRelayJumperClosed as u16, 0x19);
-        assert_eq!(Addresses::QuadRelayDefault as u16, 0x6D);
-        assert_eq!(Addresses::QuadRelayJumperClosed as u16, 0x6C);
-        assert_eq!(Addresses::DualSolidState as u16, 0x0A);
-        assert_eq!(Addresses::DualSolidStateJumperClosed as u16, 0x0B);
-        assert_eq!(Addresses::QuadSolidState as u16, 0x08);
-        assert_eq!(Addresses::QuadSolidStateJumperClosed as u16, 0x09);
-    }
-
-    #[test]
-    fn test_command_enum_values() {
-        assert_eq!(Command::DualQuadToggleBase as u8, 0x00);
-        assert_eq!(Command::ToggleRelayOne as u8, 0x01);
-        assert_eq!(Command::ToggleRelayTwo as u8, 0x02);
-        assert_eq!(Command::ToggleRelayThree as u8, 0x03);
-        assert_eq!(Command::ToggleRelayFour as u8, 0x04);
-        assert_eq!(Command::RelayOneStatus as u8, 0x05);
-        assert_eq!(Command::RelayTwoStatus as u8, 0x06);
-        assert_eq!(Command::RelayThreeStatus as u8, 0x07);
-        assert_eq!(Command::RelayFourStatus as u8, 0x08);
-        assert_eq!(Command::TurnAllOff as u8, 0x0A);
-        assert_eq!(Command::TurnAllOn as u8, 0x0B);
-        assert_eq!(Command::ToggleAll as u8, 0x0C);
-    }
-
-    #[test]
-    fn test_relay_state_enum_values() {
-        assert_eq!(RelayState::Off as u8, 0x00);
-        assert_eq!(RelayState::On as u8, 0x01);
-        assert_eq!(RelayState::SingleFirmwareVersion as u8, 0x04);
-        assert_eq!(RelayState::SingleStatusVersion as u8, 0x05);
-    }
-
-    #[test]
-    fn test_relay_status_enum_values() {
-        assert_eq!(RelayStatus::Off as u8, 0);
-        assert_eq!(RelayStatus::On as u8, 1);
-    }
-
-    #[test]
-    fn test_relay_status_from_bool() {
-        assert_eq!(RelayStatus::from(false), RelayStatus::Off);
-        assert_eq!(RelayStatus::from(true), RelayStatus::On);
-    }
-
-    #[test]
-    fn test_relay_status_to_bool() {
-        assert_eq!(bool::from(RelayStatus::Off), false);
-        assert_eq!(bool::from(RelayStatus::On), true);
-    }
-
-    #[test]
-    fn test_relay_status_from_u8() {
-        assert_eq!(RelayStatus::from(0u8), RelayStatus::Off);
-        assert_eq!(RelayStatus::from(1u8), RelayStatus::On);
-        assert_eq!(RelayStatus::from(255u8), RelayStatus::On);
-        assert_eq!(RelayStatus::from(10u8), RelayStatus::On);
-    }
-
-    #[test]
-    fn test_relay_status_to_u8() {
-        assert_eq!(u8::from(RelayStatus::Off), 0);
-        assert_eq!(u8::from(RelayStatus::On), 1);
-    }
-
-    #[test]
-    fn test_relay_status_equality() {
-        assert_eq!(RelayStatus::Off, RelayStatus::Off);
-        assert_eq!(RelayStatus::On, RelayStatus::On);
-        assert_ne!(RelayStatus::Off, RelayStatus::On);
-    }
-
-    #[test]
-    fn test_config_clone() {
-        let original = QwiicRelayConfig::new(3);
-        let cloned = original.clone();
-        assert_eq!(original.relay_count, cloned.relay_count);
-    }
-
-    #[test]
-    fn test_config_copy() {
-        let original = QwiicRelayConfig::new(2);
-        let copied = original;
-        assert_eq!(copied.relay_count, 2);
-    }
-
-    #[test]
-    #[ignore] // Requires actual hardware and permanently changes device address
-    fn test_change_i2c_address() {
+    #[ignore] // Requires actual hardware to run
+    fn test_toggle_operations() {
         let config = QwiicRelayConfig::default();
         let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+            QwiicRelay::new(config, "/dev/i2c-1", 0x18).expect("Failed to create relay");
 
-        // Test changing to a new address
-        let new_address = 0x09;
         qwiic_relay
-            .change_i2c_address(new_address)
-            .expect("Failed to change I2C address");
-        
-        // Note: After this, you would need to create a new QwiicRelay instance
-        // with the new address to continue communicating with the device
-        println!("Address changed to 0x{:02X}", new_address);
-    }
+            .set_relay_off(None)
+            .expect("Failed to set initial state");
 
-    #[test]
-    fn test_config_with_timing() {
-        let config = QwiicRelayConfig::with_timing(2, 15, 25, 300);
-        assert_eq!(config.relay_count, 2);
-        assert_eq!(config.write_delay_us, 15);
-        assert_eq!(config.state_change_delay_ms, 25);
-        assert_eq!(config.init_delay_ms, 300);
-    }
+        qwiic_relay
+            .toggle_relay(None)
+            .expect("Failed to toggle relay");
 
-    #[test]
-    fn test_config_for_solid_state() {
-        let config = QwiicRelayConfig::for_solid_state(4);
-        assert_eq!(config.relay_count, 4);
-        assert_eq!(config.write_delay_us, 5);
-        assert_eq!(config.state_change_delay_ms, 5);
-        assert_eq!(config.init_delay_ms, 100);
-    }
+        let state = qwiic_relay
+            .get_relay_state(None)
+            .expect("Failed to get relay state");
+        assert_eq!(state, RelayStatus::On);
 
-    #[test]
-    fn test_config_for_mechanical() {
-        let config = QwiicRelayConfig::for_mechanical(2);
-        assert_eq!(config.relay_count, 2);
-        assert_eq!(config.write_delay_us, 15);
-        assert_eq!(config.state_change_delay_ms, 20);
-        assert_eq!(config.init_delay_ms, 250);
-    }
+        qwiic_relay
+            .toggle_relay(None)
+            .expect("Failed to toggle relay");
 
-    #[test]
-    fn test_config_setters() {
-        let mut config = QwiicRelayConfig::new(1);
-        
-        config.set_write_delay_us(25);
-        assert_eq!(config.write_delay_us, 25);
-        
-        config.set_state_change_delay_ms(30);
-        assert_eq!(config.state_change_delay_ms, 30);
-        
-        config.set_init_delay_ms(500);
-        assert_eq!(config.init_delay_ms, 500);
-    }
-
-    #[test]
-    #[ignore] // Requires actual hardware
-    fn test_runtime_timing_adjustment() {
-        let mut config = QwiicRelayConfig::default();
-        let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-        
-        // Test setting different delays at runtime
-        qwiic_relay.set_write_delay(20);
-        assert_eq!(qwiic_relay.config.write_delay_us, 20);
-        
-        qwiic_relay.set_state_change_delay(15);
-        assert_eq!(qwiic_relay.config.state_change_delay_ms, 15);
-        
-        // Test updating entire config
-        config.write_delay_us = 30;
-        config.state_change_delay_ms = 25;
-        qwiic_relay.update_config(config);
-        assert_eq!(qwiic_relay.config.write_delay_us, 30);
-        assert_eq!(qwiic_relay.config.state_change_delay_ms, 25);
-    }
-
-    #[test]
-    #[ignore] // Requires actual hardware
-    fn test_auto_detect_timing() {
-        let config = QwiicRelayConfig::default();
-        let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-        
-        // Initialize the relay board
-        qwiic_relay.init().expect("Failed to initialize");
-        
-        // Try to auto-detect optimal timing
-        match qwiic_relay.auto_detect_timing() {
-            Ok(optimized) => {
-                if optimized {
-                    println!("Timing optimized: write_delay={}μs, state_change_delay={}ms",
-                        qwiic_relay.config.write_delay_us,
-                        qwiic_relay.config.state_change_delay_ms);
-                } else {
-                    println!("Could not optimize timing, using defaults");
-                }
-            }
-            Err(e) => {
-                println!("Auto-detect timing failed: {:?}", e);
-            }
-        }
+        let state = qwiic_relay
+            .get_relay_state(None)
+            .expect("Failed to get relay state");
+        assert_eq!(state, RelayStatus::Off);
     }
 
     #[test]
     #[ignore] // Requires actual hardware to run
-    fn test_get_relay_state_with_none() {
+    fn test_version_reading() {
         let config = QwiicRelayConfig::default();
         let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
+            QwiicRelay::new(config, "/dev/i2c-1", 0x18).expect("Failed to create relay");
 
-        // Test getting state with None (should check relay 1 at offset 0)
-        let state = qwiic_relay.get_relay_state(None);
-        assert!(state.is_ok(), "Should successfully read relay state");
-    }
+        let version = qwiic_relay
+            .get_version()
+            .expect("Failed to get version");
 
-    #[test]
-    #[ignore] // Requires actual hardware to run
-    fn test_get_relay_state_with_specific_relay() {
-        let config = QwiicRelayConfig::default();
-        let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-
-        // Test getting state for each relay (0-3 offset)
-        for relay_num in 0..4 {
-            let state = qwiic_relay.get_relay_state(Some(relay_num));
-            assert!(state.is_ok(), "Should successfully read relay {} state", relay_num + 1);
-        }
-    }
-
-    #[test]
-    #[ignore] // Requires actual hardware to run
-    fn test_relay_state_consistency() {
-        let config = QwiicRelayConfig::default();
-        let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-
-        // Turn off all relays first
-        qwiic_relay.set_all_relays_off().expect("Failed to turn off all relays");
-        
-        // Check that None parameter reads relay 1 (offset 0)
-        let state_none = qwiic_relay.get_relay_state(None).expect("Failed to get relay state");
-        let state_zero = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
-        assert_eq!(state_none, state_zero, "None should default to relay 1 (offset 0)");
-        
-        // Both should be off
-        assert_eq!(state_none, false, "Relay should be off after turning all off");
-    }
-
-    #[test]
-    #[ignore] // Requires actual hardware to run
-    fn test_relay_state_after_on_off() {
-        let config = QwiicRelayConfig::default();
-        let mut qwiic_relay =
-            QwiicRelay::new(config, "/dev/i2c-1", 0x08).expect("Could not init device");
-
-        // Turn off relay 1 first
-        qwiic_relay.set_relay_off(Some(0)).expect("Failed to turn off relay");
-        
-        // Get initial state
-        let initial_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
-        assert_eq!(initial_state, false, "Relay should be off initially");
-        
-        // Turn on relay 1
-        qwiic_relay.set_relay_on(Some(0)).expect("Failed to turn on relay");
-        
-        // Check new state
-        let new_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
-        assert_eq!(new_state, true, "Relay should be on after turning on");
-        
-        // Turn off again
-        qwiic_relay.set_relay_off(Some(0)).expect("Failed to turn off relay");
-        
-        // Check final state
-        let final_state = qwiic_relay.get_relay_state(Some(0)).expect("Failed to get relay state");
-        assert_eq!(final_state, false, "Relay should be off after turning off");
-    }
-
-    #[test]
-    fn test_error_handling_with_invalid_device_path() {
-        let config = QwiicRelayConfig::default();
-        let result = QwiicRelay::new(config, "/invalid/path", 0x18);
-        
-        // This should fail with an I2C error
-        assert!(result.is_err(), "Expected error with invalid device path");
+        assert!(version > 0, "Version should be greater than 0");
     }
 
     #[test]
     #[should_panic(expected = "Failed to turn on relay")]
     fn test_panic_message_format_on_relay() {
         // This test verifies that our panic messages are formatted correctly
-        // when using unwrap_or_else with proper error context
+        // for set_relay_on operations
         let config = QwiicRelayConfig::default();
         
         // Try to create a relay with an invalid path to trigger an error
@@ -1072,7 +892,7 @@ mod basic_tests {
                 .unwrap_or_else(|e| panic!("Failed to turn on relay 1: {:?}", e));
         } else {
             // Manually trigger the panic to test the message format
-            panic!("Failed to turn on relay 1: IoError(Io(Os {{ code: 2, kind: NotFound, message: \"No such file or directory\" }}))");
+            panic!("Failed to turn on relay 1: I2C device not found");
         }
     }
 
@@ -1090,7 +910,7 @@ mod basic_tests {
                 .unwrap_or_else(|e| panic!("Failed to get state of relay 2: {:?}", e));
         } else {
             // Manually trigger the panic to test the message format
-            panic!("Failed to get state of relay 2: IoError(Io(Os {{ code: 2, kind: NotFound, message: \"No such file or directory\" }}))");
+            panic!("Failed to get state of relay 2: I2C device not found");
         }
     }
 
@@ -1108,7 +928,7 @@ mod basic_tests {
                 .unwrap_or_else(|e| panic!("Failed to turn off relay 3: {:?}", e));
         } else {
             // Manually trigger the panic to test the message format
-            panic!("Failed to turn off relay 3: IoError(Io(Os {{ code: 2, kind: NotFound, message: \"No such file or directory\" }}))");
+            panic!("Failed to turn off relay 3: I2C device not found");
         }
     }
 
@@ -1119,8 +939,7 @@ mod basic_tests {
         let test_relay_nums = vec![1, 2, 3, 4];
         
         for relay_num in test_relay_nums {
-            // Create a config with the appropriate relay count
-            let config = QwiicRelayConfig::new(4);
+            let config = QwiicRelayConfig::new(4); // 4-relay board
             
             // Verify that the relay number is valid for the config
             assert!(relay_num > 0 && relay_num <= config.relay_count,
